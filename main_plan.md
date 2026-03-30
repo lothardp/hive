@@ -19,8 +19,10 @@ hive/
 ├── main.go
 ├── cmd/
 │   ├── root.go          # App struct, persistent flags, DB init
-│   ├── up.go            # hive up <name>
-│   ├── down.go          # hive down <name>
+│   ├── cell.go          # hive cell <name> — create worktree + DB + tmux
+│   ├── up.go            # hive up <name> — start services (docker + proxy)
+│   ├── down.go          # hive down <name> — stop services (keeps cell)
+│   ├── kill.go          # hive kill <name> — destroy everything
 │   ├── stop.go          # hive stop <name>
 │   ├── join.go          # hive join <name>
 │   ├── peek.go          # hive peek <name>
