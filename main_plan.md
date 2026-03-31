@@ -1,187 +1,160 @@
-# Hive Implementation Plan
+# Hive — Build Plan
 
-## Context
-Hive is a CLI tool for spawning isolated, parallel dev environments using Git Worktrees, Docker Compose, and Caddy reverse proxy. The repo is greenfield — no code exists yet. This plan builds the tool incrementally across 6 phases, each independently testable.
-
-## Decisions
-- Go 1.24, module `github.com/lothar/hive`
-- CLI: `spf13/cobra`
-- State: SQLite via `modernc.org/sqlite` (pure Go, no CGO)
-- YAML config: `gopkg.in/yaml.v3`
-- Concurrency: `golang.org/x/sync/errgroup`
-- Logging: `log/slog` (stdlib)
-- Wraps `git`, `docker compose`, `tmux` via `os/exec` — no Docker SDK
-
-## Project Structure
-
-```
-hive/
-├── main.go
-├── cmd/
-│   ├── root.go          # App struct, persistent flags, DB init
-│   ├── cell.go          # hive cell <name> — create worktree + DB + tmux
-│   ├── up.go            # hive up <name> — start services (docker + proxy)
-│   ├── down.go          # hive down <name> — stop services (keeps cell)
-│   ├── kill.go          # hive kill <name> — destroy everything
-│   ├── stop.go          # hive stop <name>
-│   ├── join.go          # hive join <name>
-│   ├── peek.go          # hive peek <name>
-│   ├── status.go        # hive status
-│   ├── swarm.go         # hive swarm <n1> <n2>...
-│   ├── initproxy.go     # hive init-proxy
-│   ├── notify.go        # hive notify <message>
-│   ├── notifications.go # hive notifications
-│   └── jump.go          # hive jump <cell>
-├── internal/
-│   ├── config/config.go       # .hive.yaml parsing
-│   ├── state/
-│   │   ├── db.go              # SQLite connection + migrations
-│   │   ├── models.go          # Cell struct, CellStatus enum
-│   │   └── repo.go            # CellRepository CRUD
-│   ├── worktree/worktree.go   # Git worktree create/remove
-│   ├── compose/
-│   │   ├── compose.go         # Docker Compose up/stop/down
-│   │   └── health.go          # Health check polling
-│   ├── proxy/
-│   │   ├── proxy.go           # Caddy container lifecycle + route management
-│   │   └── network.go         # hive-net Docker network mgmt
-│   ├── tmux/tmux.go           # Tmux session create/attach
-│   ├── notify/
-│   │   ├── notify.go          # Notification creation + DB ops
-│   │   └── macos.go           # macOS native notifications via osascript
-│   └── shell/exec.go          # Shared os/exec helpers
-```
+What to build, in what order. Each phase builds on the previous one and is independently useful.
 
 ---
 
-## Phase 1: Scaffold + CLI Skeleton + SQLite State
+## Phase 1: Core Cell Lifecycle ✅
 
-**Goal**: Compilable binary, all subcommands wired as stubs, working SQLite CRUD.
+The basics — create, join, switch between, and destroy cells.
 
-**Create**:
-- `go.mod`, `main.go`
-- `cmd/root.go` — `App` struct holding `*sql.DB`, `*CellRepository`, `*ProjectConfig`. `PersistentPreRunE` bootstraps `~/.hive/` and opens DB.
-- `cmd/{up,down,stop,join,peek,status,swarm,initproxy,notify,notifications,jump}.go` — stubs printing "not implemented"
-- `internal/state/models.go` — `Cell` struct with fields: Name, Project, Branch, WorktreePath, Status, Ports, CreatedAt, UpdatedAt. Status enum: provisioning/running/stopped/error.
-- `internal/state/db.go` — `Open(path)` creates DB + runs schema migration (cells table with indexes).
-- `internal/state/repo.go` — `CellRepository` with Create, GetByName, List, ListByStatus, UpdateStatus, Delete.
-- `internal/config/config.go` — loads `.hive.yaml` (compose_path, seed_scripts, expose_port, env overrides).
-- `internal/shell/exec.go` — `Run()` and `RunInDir()` helpers wrapping `os/exec`.
-
-**Verify**: `go build`, `./hive --help` shows all commands, `go test ./internal/state/...` passes against `:memory:` SQLite.
+- `hive cell <name>` — create worktree + tmux session + DB record
+- `hive join <name>` — attach to a cell's tmux session
+- `hive switch` — fzf picker to switch between cells
+- `hive status` — list all cells
+- `hive kill <name>` — destroy worktree, tmux session, and DB record
+- SQLite state layer with full CRUD
+- `.hive.yaml` config loading (temporary — will move to DB)
+- Rollback on failure (if tmux fails, clean up worktree and DB)
 
 ---
 
-## Phase 2: Git Worktree Management
+## Phase 2: Installation & Repo Registration
 
-**Goal**: `hive up` creates worktrees, `hive down` removes them.
+Make Hive properly installable and let repos declare how they work.
 
-**Create**:
-- `internal/worktree/worktree.go` — `Manager` with `BaseDir` (default `~/workspaces`). Methods: `Create(repoDir, project, name, branch) → path`, `Remove(repoDir, path)`.
-  - Create: auto-creates branch if missing, runs `git worktree add <path> <branch>`
-  - Remove: `git worktree remove --force`, then `git worktree prune`
+### `hive install`
+- Create `~/.hive/` directory and SQLite DB
+- Generate `~/.hive/tmux.conf` and prompt user to source it
+- Prompt for main projects directory (e.g., `~/side_projects`)
+- Optionally set up cron jobs for background tasks
 
-**Modify**:
-- `cmd/up.go` — detect project name from git remote/dirname, create worktree, insert cell into DB as `running`.
-- `cmd/down.go` — look up cell, remove worktree, delete from DB.
-- `cmd/root.go` — add project detection (git rev-parse --show-toplevel).
+### `hive setup`
+- Register a repo with Hive (run from inside the repo)
+- Store per-repo config in DB: layout, hooks, port vars, env vars
+- Optionally spawn a guided agent to analyze the project
+- Warn if codebase needs changes to work with isolated worktrees
 
-**Verify**: `hive up test-feat` creates `~/workspaces/<project>/test-feat` as valid worktree. `hive down test-feat` cleans up worktree + DB row.
-
----
-
-## Phase 3: Docker Compose Integration
-
-**Goal**: `hive up` also starts Docker containers. `hive stop`/`hive down` manage container lifecycle.
-
-**Create**:
-- `internal/compose/compose.go` — `Manager` with `Up(workDir, composePath, projectName, env)`, `Stop(...)`, `Down(...)`, `PS(...)`.
-- `internal/compose/health.go` — `HealthChecker` with `WaitHealthy()` — polls `docker compose ps` until healthy or 120s timeout.
-
-**Modify**:
-- `cmd/up.go` — after worktree creation: inject `.env` file, `compose.Up()`, wait healthy, run seed scripts. Add rollback on failure (cleanup stack pattern).
-- `cmd/down.go` — `compose.Down()` before worktree removal.
-- `cmd/stop.go` — implement: `compose.Stop()` + update status to `stopped`.
-- `cmd/up.go` — detect if cell exists in `stopped` state → resume (compose up) instead of re-creating worktree.
-
-**Verify**: `hive up` with a simple docker-compose.yml starts containers. `hive stop` stops them. `hive down` removes everything.
+### Config in DB
+- All config lives in SQLite, not YAML files
+- `hive config export` — dump to YAML for sharing/version control
+- `hive config import` — load from YAML back into DB
 
 ---
 
-## Phase 4: Reverse Proxy (Caddy)
+## Phase 3: Setup Hooks & Cell Layout
 
-**Goal**: `hive init-proxy` starts global Caddy. `hive up` registers `<name>.dev.local` routes.
+Make cells useful out of the box — run setup scripts and open the right tabs.
 
-**Approach**: Use Caddy's admin API (`:2019`) to add/remove routes dynamically — cleaner than rewriting Caddyfiles.
+### Setup Hooks
+Per-repo scripts that run when a new cell is created (configured during `hive setup`):
+- Copy or symlink `node_modules` from queen worktree
+- Copy `.env.local` or other gitignored files
+- Run install commands (`npm install`, `bundle install`, etc.)
+- Symlink shared build caches
 
-**Create**:
-- `internal/proxy/proxy.go` — `ProxyManager` with `Init()`, `IsRunning()`, `AddRoute(name, containerAddr)`, `RemoveRoute(name)`, `Stop()`.
-- `internal/proxy/network.go` — create/manage `hive-net` Docker network; `ConnectNetwork(container)` / `DisconnectNetwork(container)`.
-- Embedded Caddy docker-compose.yml via `//go:embed`.
-
-**Modify**:
-- `cmd/initproxy.go` — create `hive-net`, start Caddy container, print DNS setup instructions.
-- `cmd/up.go` — after compose up: connect container to `hive-net`, add Caddy route for `<name>.dev.local` → `<container>:<expose_port>`.
-- `cmd/down.go` — remove Caddy route, disconnect from `hive-net`.
-
-**Verify**: `hive init-proxy`, then `hive up test` → `curl -H "Host: test.dev.local" localhost` reaches the container.
-
----
-
-## Phase 5: Compound Commands
-
-**Goal**: `swarm`, `status`, `peek`, `join`.
-
-**Create**:
-- `internal/tmux/tmux.go` — `SessionExists()`, `CreateSession(name, workDir)`, `AttachSession(name)` (uses `syscall.Exec` to replace process).
-
-**Modify**:
-- `cmd/swarm.go` — accept multiple names, spin up cells concurrently with `errgroup` (limit 3).
-- `cmd/status.go` — query all cells, enrich with live `compose.PS()`, render table via `text/tabwriter`.
-- `cmd/peek.go` — single cell detail: path, branch, containers, ports, URL. Optional `--logs` flag.
-- `cmd/join.go` — look up cell, create tmux session if needed, attach.
-
-**Verify**: Full integration walkthrough — swarm 3 cells, status shows all, peek one, join one, down all.
+### Cell Layout
+Per-repo tmux layout — tabs, panes, and startup commands:
+- Each tab becomes a tmux window (e.g., editor, server, tests, shell)
+- Tabs can have up to two panes with a horizontal or vertical split
+- Each pane can run a command or be a plain shell
+- No layout configured = current behavior (one tab, plain shell)
 
 ---
 
-## Phase 6: Notifications
+## Phase 4: Port Allocation & Environment Variables
 
-**Goal**: Agents (Claude Code etc.) can send notifications from inside a cell. Notifications are stored in SQLite, shown as macOS notifications, and allow quick jumping to the notifying cell.
+Eliminate port conflicts between parallel cells.
 
-**Commands**:
-- `hive notify "Need API key"` — send notification (auto-detects cell from cwd matching a worktree path in DB)
-- `hive notifications` — list recent notifications, filterable by `--cell` and `--unread`
-- `hive jump <cell>` — mark notification read + attach to cell's tmux session (alias for peek + join)
-
-**Create**:
-- `internal/notify/notify.go` — `Notification` model (ID, CellName, Message, Read bool, CreatedAt). `NotificationRepository` with Create, List, MarkRead, MarkAllRead, DeleteForCell.
-- `internal/notify/macos.go` — `SendMacOS(title, message, cellName)` using `osascript -e 'display notification ...'`. The notification title is the cell name, subtitle is "Hive", body is the message.
-- `cmd/notify.go` — detect current cell from cwd (match against worktree paths in DB), create notification + fire macOS alert.
-- `cmd/notifications.go` — list notifications as a table (cell, message, time, read/unread).
-- `cmd/jump.go` — mark notification(s) read for that cell + attach tmux session.
-
-**Schema addition** (in `state/db.go` migration):
-```sql
-CREATE TABLE IF NOT EXISTS notifications (
-    id        INTEGER PRIMARY KEY AUTOINCREMENT,
-    cell_name TEXT NOT NULL,
-    message   TEXT NOT NULL,
-    read      BOOLEAN NOT NULL DEFAULT 0,
-    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (cell_name) REFERENCES cells(name) ON DELETE CASCADE
-);
-```
-
-**Cell detection from cwd**: When an agent runs `hive notify` from inside a worktree, Hive checks `os.Getwd()` against all `worktree_path` values in the cells table. Longest prefix match determines the cell.
-
-**Verify**: From inside a cell's worktree, `hive notify "done"` fires a macOS notification and shows up in `hive notifications`. `hive jump <cell>` attaches to tmux.
+- Repo config declares which env vars hold port numbers (e.g., `PORT`, `DB_PORT`)
+- Hive allocates unused ports per cell and injects them as env vars
+- Additional static env vars configurable per repo (e.g., `MY_HOST=localhost`)
+- Ports are released when cells are killed
 
 ---
 
-## Cross-Cutting
+## Phase 5: Queen Sessions & Headless Cells
 
-- **Rollback on failure**: `hive up` uses a deferred cleanup stack — if compose fails, worktree is removed and DB row deleted.
-- **Verbose mode**: `--verbose` / `-v` flag on root sets `slog` to debug level.
-- **Project detection**: `git rev-parse --show-toplevel` in root command; error if not in a git repo (except `status`, `init-proxy`).
-- **Embed**: Caddy compose template embedded in binary via `//go:embed`.
+Two new cell types beyond normal cells.
+
+### Queen Sessions
+- Auto-created when you create your first cell for a repo
+- Read-only-ish worktree parked on the default branch
+- Clean environment for exploring the repo without a feature branch
+
+### Headless Cells
+- `hive cell --headless <name> [dir]` — tmux session in any directory
+- No git, no worktree — just a quick scratch workspace
+- Still tracked in DB and shows up in `hive status` / `hive switch`
+
+---
+
+## Phase 6: Tmux Integration
+
+Deeper tmux integration so you never need to leave the keyboard.
+
+### Keybindings
+Custom tmux keybindings defined in `~/.hive/tmux.conf`:
+- Switch between cells (fzf picker)
+- Quick-create a new cell
+- Kill the current cell
+- Show cell status
+
+---
+
+## Phase 7: Notifications
+
+Let agents communicate from inside cells.
+
+- `hive notify "message"` — auto-detects cell from cwd, stores in DB, fires macOS notification
+- `hive notifications` — list recent notifications, filterable by cell and read/unread
+- `hive jump <cell>` — mark notifications read + attach to cell's tmux session
+
+---
+
+## Phase 8: Service Management
+
+Start and stop project services per cell.
+
+- `hive up <name>` — start services (could be Docker Compose, could be something else)
+- `hive down <name>` — stop services and clean up
+- `hive stop <name>` — suspend services (keep cell alive)
+- Health check polling — wait for services to be ready
+
+---
+
+## Phase 9: Reverse Proxy
+
+URL-based routing for cells that run web services.
+
+- `hive init-proxy` — start global Caddy container on a shared Docker network
+- `hive up` registers `<name>.dev.local` route via Caddy admin API
+- `hive down` removes the route
+- Complements port allocation — ports for simple setups, proxy for full web stacks
+
+---
+
+## Phase 10: TUI Dashboard
+
+Interactive terminal UI as the default `hive` command (Bubble Tea).
+
+- See all active cells with status, branch, project
+- Navigate and switch into cells
+- Create and kill cells
+- View agent notifications
+- Replaces `hive status` as the primary overview
+
+---
+
+## Phase 11: Background Tasks & Polish
+
+- Cron-based `git fetch` across registered repos (configurable per repo)
+- `hive swarm <n1> <n2>...` — batch cell creation with concurrency limit
+- `hive peek <name>` — detailed cell info (path, branch, ports, containers)
+
+---
+
+## Future
+
+- **Multicell**: group multiple repos under a single feature (e.g., server + web + mobile). Deferred until normal cells are solid.
+- **Web Dashboard** (`hive serve`): browser-based GUI for monitoring cells. Same SQLite data layer. Deferred until TUI is stable.
