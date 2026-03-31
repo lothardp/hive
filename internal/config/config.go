@@ -10,10 +10,26 @@ import (
 )
 
 type ProjectConfig struct {
-	ComposePath string            `yaml:"compose_path"`
-	SeedScripts []string          `yaml:"seed_scripts"`
-	ExposePort  int               `yaml:"expose_port"`
-	Env         map[string]string `yaml:"env"`
+	ComposePath string            `yaml:"compose_path" json:"compose_path"`
+	SeedScripts []string          `yaml:"seed_scripts" json:"seed_scripts"`
+	ExposePort  int               `yaml:"expose_port" json:"expose_port"`
+	Env         map[string]string `yaml:"env" json:"env"`
+	Hooks       []string          `yaml:"hooks" json:"hooks"`
+	Layouts     map[string]Layout `yaml:"layouts" json:"layouts"`
+}
+
+type Layout struct {
+	Windows []Window `yaml:"windows" json:"windows"`
+}
+
+type Window struct {
+	Name  string `yaml:"name" json:"name"`
+	Panes []Pane `yaml:"panes" json:"panes"`
+}
+
+type Pane struct {
+	Command string `yaml:"command,omitempty" json:"command,omitempty"`
+	Split   string `yaml:"split,omitempty" json:"split,omitempty"`
 }
 
 func Load(dir string) (*ProjectConfig, error) {
