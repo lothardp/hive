@@ -71,34 +71,36 @@ hive setup                    # Interactive: project name, remote, default branc
 From inside a registered (or any git) repo:
 
 ```bash
-hive cell my-feature          # Creates worktree + tmux on a new branch
-hive cell bugfix -b main      # Creates worktree from existing branch
-hive cell scratch --headless  # Tmux session in current dir, no worktree
+hive cell my-feature          # Creates myapp-my-feature (worktree + tmux)
+hive cell bugfix -b main      # Creates myapp-bugfix from existing branch
+hive cell scratch --headless  # Tmux session in current dir (no prefix, no worktree)
 hive cell notes --headless ~/notes  # Tmux session in a specific directory
 ```
 
 On your first cell for a project, Hive automatically creates a **queen session** — a protected environment on the default branch.
 
+Cell names are automatically prefixed with the project name (e.g., `my-feature` becomes `myapp-my-feature`). Headless cells are never prefixed. You can override the prefix with `cell_prefix` in your config.
+
 ### Navigate Cells
 
 ```bash
-hive join my-feature          # Attach to cell's tmux session
+hive join myapp-my-feature    # Attach to cell's tmux session
 hive switch                   # Interactive fzf picker
 hive status                   # List all cells
 ```
 
 ```
-NAME                PROJECT    BRANCH         STATUS    TMUX    PORTS      AGE
-myapp-queen [queen] myapp      main           stopped   alive   -          2h
-my-feature          myapp      my-feature     stopped   alive   3001,5433  2h
-bugfix              myapp      main           stopped   alive   3002,5434  15m
-scratch [headless]  -          -              stopped   alive   -          5m
+NAME                    PROJECT    BRANCH         STATUS    TMUX    PORTS      AGE
+myapp-queen [queen]     myapp      main           stopped   alive   -          2h
+myapp-my-feature        myapp      my-feature     stopped   alive   3001,5433  2h
+myapp-bugfix            myapp      main           stopped   alive   3002,5434  15m
+scratch [headless]      -          -              stopped   alive   -          5m
 ```
 
 ### Clean Up
 
 ```bash
-hive kill my-feature          # Removes worktree, branch, tmux session, and DB record
+hive kill myapp-my-feature    # Removes worktree, branch, tmux session, and DB record
 ```
 
 Queen sessions can't be killed while other cells exist for the project — kill the regular cells first.
@@ -120,6 +122,7 @@ Config can live in the database (via `hive setup`) or in a `.hive.yaml` file in 
 ```yaml
 compose_path: docker-compose.yml
 expose_port: 3000
+cell_prefix: myapp              # Override default project-name prefix (optional)
 seed_scripts:
   - npm install
   - npm run db:migrate
@@ -155,6 +158,23 @@ Commands listed in `hooks` run sequentially in the cell's worktree on creation. 
 ### Layouts
 
 Define tmux window/pane layouts in `layouts`. A layout named `"default"` is auto-applied when creating a cell. Layouts can be set per-repo or globally with `hive config apply --global`.
+
+## Shell Completion
+
+Hive supports tab completion for commands, flags, and cell names:
+
+```bash
+# Zsh (add to ~/.zshrc)
+source <(hive completion zsh)
+
+# Bash (add to ~/.bashrc)
+source <(hive completion bash)
+
+# Fish
+hive completion fish | source
+```
+
+After setup, `hive kill <TAB>` will show all cell names.
 
 ## Roadmap
 

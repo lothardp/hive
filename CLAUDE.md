@@ -26,6 +26,7 @@ hive config apply [-f file] [--global]  # Merge YAML into repo or global config
 - **Cell**: An isolated dev environment = git worktree + tmux session + DB record. Each cell gets its own filesystem, branch, and terminal session. Three types: `normal`, `queen`, `headless`.
 - **Queen Session**: Auto-created on first `hive cell` for a project. Uses the repo's original directory (not a worktree) on the default branch. Protected: cannot be killed while other cells exist for the project. Branch integrity is verified on every Hive command.
 - **Headless Cell**: A tmux session in an arbitrary directory, no git worktree attached. Created with `hive cell <name> --headless [dir]`.
+- **Cell Naming**: All cell names are auto-prefixed with the project name (e.g., `hive cell foo` in project `myapp` → cell `myapp-foo`). Override with `cell_prefix` in config. Headless cells are never prefixed.
 
 ### Tech Stack
 
@@ -45,6 +46,7 @@ hive/
 ├── cmd/                           # Cobra commands, one file per command
 │   ├── root.go                    # App struct, PersistentPreRunE for DB/config init
 │   ├── cell.go                    # hive cell — create worktree + tmux + DB (+ queen + headless)
+│   ├── completion.go              # Shell completion helpers (cell name completion)
 │   ├── install.go                 # hive install — one-time machine bootstrap
 │   ├── setup.go                   # hive setup — interactive repo registration
 │   ├── config.go                  # hive config — show/export/import/apply subcommands
@@ -84,7 +86,7 @@ hive/
 
 ### Command Structure
 
-Each command is a file in `cmd/` with a package-level `*cobra.Command` var and an `init()` that registers it with `rootCmd`. Commands use `RunE` (not `Run`) to propagate errors.
+Each command is a file in `cmd/` with a package-level `*cobra.Command` var and an `init()` that registers it with `rootCmd`. Commands use `RunE` (not `Run`) to propagate errors. Commands that take a cell name argument use `ValidArgsFunction: completeCellNames` for shell completion.
 
 ### Error Handling
 
@@ -157,6 +159,8 @@ go test ./...               # All tests
 - Env var injection (port vars + static env + `HIVE_CELL` + `HIVE_QUEEN_DIR`)
 - SQLite state with four tables: `cells`, `notifications`, `global_config`, `repos`
 - Config merge via `hive config apply` (upsert semantics)
+- Cell name prefixing (project name or `cell_prefix` config; headless cells excluded)
+- Shell completion for commands and cell names (`hive completion bash/zsh/fish`)
 
 ### Next Up (in priority order)
 1. `hive up` / `hive down` / `hive stop` — start/stop project services
