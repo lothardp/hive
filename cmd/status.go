@@ -1,8 +1,12 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
+	"strconv"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -27,7 +31,7 @@ var statusCmd = &cobra.Command{
 		}
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "NAME\tPROJECT\tBRANCH\tSTATUS\tTMUX\tAGE")
+		fmt.Fprintln(w, "NAME\tPROJECT\tBRANCH\tSTATUS\tTMUX\tPORTS\tAGE")
 
 		for _, c := range cells {
 			tmuxStatus := "dead"
@@ -37,8 +41,9 @@ var statusCmd = &cobra.Command{
 			}
 
 			age := formatAge(time.Since(c.CreatedAt))
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
-				c.Name, c.Project, c.Branch, c.Status, tmuxStatus, age)
+			portsDisplay := formatPortsColumn(c.Ports)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				c.Name, c.Project, c.Branch, c.Status, tmuxStatus, portsDisplay, age)
 		}
 
 		w.Flush()
@@ -57,6 +62,30 @@ func formatAge(d time.Duration) string {
 	default:
 		return fmt.Sprintf("%dd", int(d.Hours()/24))
 	}
+}
+
+// formatPortsColumn parses the ports JSON and returns a comma-separated list of port numbers.
+func formatPortsColumn(portsJSON string) string {
+	if portsJSON == "" || portsJSON == "{}" {
+		return "-"
+	}
+	var portMap map[string]int
+	if err := json.Unmarshal([]byte(portsJSON), &portMap); err != nil {
+		return "-"
+	}
+	if len(portMap) == 0 {
+		return "-"
+	}
+	vals := make([]int, 0, len(portMap))
+	for _, v := range portMap {
+		vals = append(vals, v)
+	}
+	sort.Ints(vals)
+	parts := make([]string, len(vals))
+	for i, v := range vals {
+		parts[i] = strconv.Itoa(v)
+	}
+	return strings.Join(parts, ",")
 }
 
 func init() {

@@ -18,8 +18,13 @@ func NewManager() *Manager {
 }
 
 // CreateSession creates a new detached tmux session with the given name and working directory.
-func (m *Manager) CreateSession(ctx context.Context, name, workDir string) error {
-	res, err := shell.Run(ctx, "tmux", "new-session", "-d", "-s", name, "-c", workDir)
+// Environment variables are set via -e flags so they apply to the initial window too.
+func (m *Manager) CreateSession(ctx context.Context, name, workDir string, env map[string]string) error {
+	args := []string{"new-session", "-d", "-s", name, "-c", workDir}
+	for k, v := range env {
+		args = append(args, "-e", k+"="+v)
+	}
+	res, err := shell.Run(ctx, "tmux", args...)
 	if err != nil {
 		return fmt.Errorf("creating tmux session: %w", err)
 	}

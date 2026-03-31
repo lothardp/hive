@@ -17,6 +17,9 @@ func (c *ProjectConfig) Merge(other *ProjectConfig) {
 	if other.Hooks != nil {
 		c.Hooks = other.Hooks
 	}
+	if other.PortVars != nil {
+		c.PortVars = other.PortVars
+	}
 
 	// Merge maps
 	if other.Env != nil {

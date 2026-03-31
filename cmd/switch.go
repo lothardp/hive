@@ -73,7 +73,7 @@ var switchCmd = &cobra.Command{
 			return fmt.Errorf("checking tmux session: %w", err)
 		}
 		if !exists {
-			if err := app.TmuxMgr.CreateSession(ctx, name, cell.WorktreePath); err != nil {
+			if err := app.TmuxMgr.CreateSession(ctx, name, cell.WorktreePath, nil); err != nil {
 				return fmt.Errorf("creating tmux session: %w", err)
 			}
 		}

@@ -4,10 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/lothardp/hive/internal/config"
+	"github.com/lothardp/hive/internal/envars"
 	"github.com/lothardp/hive/internal/hooks"
 	"github.com/lothardp/hive/internal/layout"
+	"github.com/lothardp/hive/internal/ports"
 	"github.com/lothardp/hive/internal/state"
 	"github.com/spf13/cobra"
 )
@@ -60,8 +64,36 @@ var cellCmd = &cobra.Command{
 			return fmt.Errorf("recording cell: %w", err)
 		}
 
-		// Create tmux session
-		if err := app.TmuxMgr.CreateSession(ctx, name, wtPath); err != nil {
+		// Allocate ports
+		var allocatedPorts map[string]int
+		if app.Config != nil && len(app.Config.PortVars) > 0 {
+			allocator := ports.NewAllocator(app.DB)
+			allocatedPorts, err = allocator.Allocate(ctx, app.Config.PortVars)
+			if err != nil {
+				_ = app.Repo.Delete(ctx, name)
+				_ = app.WtMgr.Remove(ctx, app.RepoDir, wtPath)
+				return fmt.Errorf("allocating ports: %w", err)
+			}
+
+			portsJSON, _ := json.Marshal(allocatedPorts)
+			cell.Ports = string(portsJSON)
+			if err := app.Repo.UpdatePorts(ctx, name, cell.Ports); err != nil {
+				_ = app.Repo.Delete(ctx, name)
+				_ = app.WtMgr.Remove(ctx, app.RepoDir, wtPath)
+				return fmt.Errorf("saving port allocations: %w", err)
+			}
+		}
+
+		// Build env vars for tmux session
+		var staticEnv map[string]string
+		if app.Config != nil {
+			staticEnv = app.Config.Env
+		}
+		envVars := envars.BuildVars(allocatedPorts, staticEnv)
+		envVars["HIVE_CELL"] = name
+
+		// Create tmux session with env vars baked in
+		if err := app.TmuxMgr.CreateSession(ctx, name, wtPath, envVars); err != nil {
 			_ = app.Repo.Delete(ctx, name)
 			_ = app.WtMgr.Remove(ctx, app.RepoDir, wtPath)
 			return fmt.Errorf("creating tmux session: %w", err)
@@ -93,6 +125,9 @@ var cellCmd = &cobra.Command{
 		fmt.Printf("  Branch:   %s\n", branch)
 		fmt.Printf("  Worktree: %s\n", wtPath)
 		fmt.Printf("  Tmux:     %s\n", name)
+		if len(allocatedPorts) > 0 {
+			fmt.Printf("  Ports:    %s\n", formatPorts(allocatedPorts))
+		}
 		if hookSummary != "" {
 			fmt.Printf("  Hooks:    %s\n", hookSummary)
 		}
@@ -124,6 +159,25 @@ func resolveLayout(ctx context.Context, cfg *config.ProjectConfig) (config.Layou
 		return lyt, true
 	}
 	return config.Layout{}, false
+}
+
+// formatPorts returns a display string like "3001 (PORT), 5433 (DB_PORT)".
+func formatPorts(ports map[string]int) string {
+	type entry struct {
+		name string
+		port int
+	}
+	entries := make([]entry, 0, len(ports))
+	for k, v := range ports {
+		entries = append(entries, entry{k, v})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].port < entries[j].port })
+
+	parts := make([]string, len(entries))
+	for i, e := range entries {
+		parts[i] = fmt.Sprintf("%d (%s)", e.port, e.name)
+	}
+	return strings.Join(parts, ", ")
 }
 
 func init() {
