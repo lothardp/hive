@@ -7,9 +7,10 @@ import (
 )
 
 var upCmd = &cobra.Command{
-	Use:   "up <name>",
-	Short: "Start services for an existing cell (docker compose + proxy)",
-	Args:  cobra.ExactArgs(1),
+	Use:               "up <name>",
+	Short:             "Start services for an existing cell (docker compose + proxy)",
+	Args:              cobra.ExactArgs(1),
+	ValidArgsFunction: completeCellNames,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		name := args[0]

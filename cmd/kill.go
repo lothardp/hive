@@ -8,9 +8,10 @@ import (
 )
 
 var killCmd = &cobra.Command{
-	Use:   "kill <name>",
-	Short: "Tear down everything: containers, proxy, worktree, tmux session",
-	Args:  cobra.ExactArgs(1),
+	Use:               "kill <name>",
+	Short:             "Tear down everything: containers, proxy, worktree, tmux session",
+	Args:              cobra.ExactArgs(1),
+	ValidArgsFunction: completeCellNames,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		name := args[0]

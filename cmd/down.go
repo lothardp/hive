@@ -7,9 +7,10 @@ import (
 )
 
 var downCmd = &cobra.Command{
-	Use:   "down <name>",
-	Short: "Stop and remove services for a cell (keeps worktree and tmux)",
-	Args:  cobra.ExactArgs(1),
+	Use:               "down <name>",
+	Short:             "Stop and remove services for a cell (keeps worktree and tmux)",
+	Args:              cobra.ExactArgs(1),
+	ValidArgsFunction: completeCellNames,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		name := args[0]

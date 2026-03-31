@@ -7,9 +7,10 @@ import (
 )
 
 var joinCmd = &cobra.Command{
-	Use:   "join <name>",
-	Short: "Attach to a cell's tmux session",
-	Args:  cobra.ExactArgs(1),
+	Use:               "join <name>",
+	Short:             "Attach to a cell's tmux session",
+	Args:              cobra.ExactArgs(1),
+	ValidArgsFunction: completeCellNames,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		name := args[0]
