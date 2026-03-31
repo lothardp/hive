@@ -97,6 +97,46 @@ myapp-bugfix            myapp      main           stopped   alive   3002,5434  1
 scratch [headless]      -          -              stopped   alive   -          5m
 ```
 
+### Dashboard
+
+```bash
+hive dashboard                # Interactive TUI overview of all cells
+```
+
+A tree-view TUI (built with Bubble Tea) showing cells grouped under projects. Queen cells are highlighted with a crown icon, headless cells are dimmed. Also shows non-Hive tmux sessions in a separate group.
+
+| Key | Action |
+|-----|--------|
+| `j`/`k` or `↑`/`↓` | Navigate |
+| `Enter` | Switch to cell |
+| `x` | Kill cell (with confirmation) |
+| `n` | Mark notifications read |
+| `c` | Create cell prompt |
+| `r` | Refresh |
+| `q` | Quit |
+
+### Notifications
+
+Agents (or scripts) running inside cells can send notifications:
+
+```bash
+hive notify myapp-my-feature -m "Build complete" -t "CI"
+hive notifications                # List all
+hive notifications --unread       # Unread only
+hive notifications 42             # View details for notification #42
+```
+
+Unread counts appear in `hive status` and the TUI dashboard.
+
+### Tmux Keybindings
+
+```bash
+hive keybindings              # Regenerate and reload tmux keybindings
+hive keybindings --direct     # Bind directly to <prefix> <key> instead of key table
+```
+
+By default, Hive uses a tmux key table: `<prefix> h` enters the Hive table, then `s`/`c`/`k`/`d` for switch/create/kill/dashboard. With `--direct`, bindings go straight to `<prefix> s`, etc.
+
 ### Clean Up
 
 ```bash
@@ -178,12 +218,9 @@ After setup, `hive kill <TAB>` will show all cell names.
 
 ## Roadmap
 
+- **Background tasks** — periodic git fetch and other cron-style operations
 - **Service management** (`hive up/down/stop`) — start/stop project services per cell
 - **Reverse proxy** — `<cell>.dev.local` URL routing via Caddy
-- **Tmux keybindings** — quick-access Hive commands from within tmux
-- **TUI dashboard** — interactive terminal UI as the default `hive` command
-- **Notifications** — agents can notify you from inside cells
-- **Background tasks** — periodic git fetch and other cron-style operations
 
 ## License
 

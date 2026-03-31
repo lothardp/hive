@@ -13,10 +13,15 @@ hive join <name>               # Attach to a cell's tmux session
 hive switch                    # fzf picker to switch between cells
 hive status                    # List all cells with status
 hive kill <name>               # Destroy cell (worktree + tmux + DB record)
+hive dashboard                 # Interactive TUI overview (Bubble Tea)
 hive config show               # Show effective config for current repo
 hive config export [-f file]   # Export repo config to YAML
 hive config import [-f file]   # Import repo config from YAML
 hive config apply [-f file] [--global]  # Merge YAML into repo or global config
+hive keybindings [--direct]    # Regenerate tmux keybindings
+hive notify <cell> -m <msg>    # Send a notification to a cell
+hive notifications             # List recent notifications
+hive logs                      # Tail the Hive log file
 ```
 
 ## Architecture
@@ -35,6 +40,7 @@ hive config apply [-f file] [--global]  # Merge YAML into repo or global config
 - **State**: SQLite via `modernc.org/sqlite` (pure Go, no CGO)
 - **Config**: `.hive.yaml` per repo, parsed with `gopkg.in/yaml.v3`
 - **Logging**: `log/slog` (stdlib)
+- **TUI**: `charmbracelet/bubbletea`, `charmbracelet/lipgloss`, `charmbracelet/bubbles`
 - **External tools**: `git`, `tmux`, `fzf` (for switch), `docker compose` (future)
 - All external tools are called via `os/exec`, no SDKs
 
@@ -54,6 +60,11 @@ hive/
 │   ├── switch.go                  # hive switch — fzf-based cell picker
 │   ├── status.go                  # hive status — table of all cells
 │   ├── kill.go                    # hive kill — full teardown (+ queen/headless paths)
+│   ├── dashboard.go               # hive dashboard — Bubble Tea TUI
+│   ├── keybindings.go             # hive keybindings — regenerate tmux keybindings
+│   ├── notify.go                  # hive notify — send notifications to cells
+│   ├── notifications.go           # hive notifications — list/view notifications
+│   ├── logs.go                    # hive logs — tail ~/.hive/hive.log
 │   └── [up, down, stop, etc.]     # Stubs for future phases
 ├── internal/
 │   ├── config/
@@ -69,8 +80,11 @@ hive/
 │   │   ├── repo.go                # CellRepository CRUD (+ GetQueen, CountByProject, UpdatePorts)
 │   │   ├── config_repo.go         # ConfigRepository — global_config key/value store
 │   │   └── repo_repo.go           # RepoRepository — registered repos CRUD
+│   ├── keybindings/keybindings.go  # Tmux keybinding generator (table or direct mode)
+│   ├── notify/notify.go           # Notification sender (stub for future)
+│   ├── tui/dashboard.go           # Bubble Tea dashboard model (tree view, actions)
 │   ├── worktree/worktree.go       # Git worktree create/remove/branch delete, project detection
-│   ├── tmux/tmux.go               # Tmux session create/attach/kill (env vars via -e flags)
+│   ├── tmux/tmux.go               # Tmux session create/attach/kill/list (env vars via -e flags)
 │   └── shell/exec.go              # os/exec helpers: Run(), RunInDir(), RunInDirWithEnv()
 ```
 
@@ -161,14 +175,16 @@ go test ./...               # All tests
 - Config merge via `hive config apply` (upsert semantics)
 - Cell name prefixing (project name or `cell_prefix` config; headless cells excluded)
 - Shell completion for commands and cell names (`hive completion bash/zsh/fish`)
+- Tmux keybindings (`hive keybindings`) — table mode or direct mode, leader key configurable
+- Notifications (`hive notify`, `hive notifications`) — agents send notifications from inside cells
+- TUI dashboard (`hive dashboard`) — Bubble Tea tree view with switch, kill, notification actions
+- File logging to `~/.hive/hive.log` with `hive logs` to tail it
+- Graceful kill for orphaned cells (tmux session lost but DB record remains)
 
 ### Next Up (in priority order)
-1. `hive up` / `hive down` / `hive stop` — start/stop project services
-2. Caddy reverse proxy (`<name>.dev.local` routing)
-3. Tmux keybindings for Hive commands
-4. TUI dashboard (Bubble Tea) as default `hive` command
-5. Notifications system (agents notify from inside cells)
-6. Background cron tasks (periodic git fetch)
+1. Background cron tasks (periodic git fetch)
+2. `hive up` / `hive down` / `hive stop` — start/stop project services (deferred, needs rethinking)
+3. Caddy reverse proxy (`<name>.dev.local` routing) (deferred, needs rethinking)
 
 ### Networking Strategy
 Port allocation comes first — Hive assigns unique ports per cell via env vars, no containers needed. Caddy reverse proxy (`<name>.dev.local`) is a later addition for projects that want URL-based routing via Docker.
