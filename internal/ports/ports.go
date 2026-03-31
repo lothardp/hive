@@ -5,6 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strconv"
+
+	"github.com/lothardp/hive/internal/shell"
 )
 
 // Allocator assigns unique ports per cell from a fixed range.
@@ -32,7 +35,7 @@ func (a *Allocator) Allocate(ctx context.Context, varNames []string) (map[string
 	result := make(map[string]int, len(varNames))
 	next := a.start
 	for _, name := range varNames {
-		for next <= a.end && used[next] {
+		for next <= a.end && (used[next] || portInUse(ctx, next)) {
 			next++
 		}
 		if next > a.end {
@@ -43,6 +46,15 @@ func (a *Allocator) Allocate(ctx context.Context, varNames []string) (map[string
 		next++
 	}
 	return result, nil
+}
+
+// portInUse checks if a port is bound on the system using lsof.
+func portInUse(ctx context.Context, port int) bool {
+	res, err := shell.Run(ctx, "lsof", "-iTCP:"+strconv.Itoa(port), "-sTCP:LISTEN", "-t")
+	if err != nil {
+		return false
+	}
+	return res.ExitCode == 0
 }
 
 // usedPorts returns a set of all ports currently allocated to any cell.
