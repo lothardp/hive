@@ -40,8 +40,12 @@ var installCmd = &cobra.Command{
 		if leader == "" {
 			leader = keybindings.DefaultLeader
 		}
+		direct := false
+		if saved, _ := app.ConfigRepo.Get(ctx, "keybinding_direct"); saved == "true" {
+			direct = true
+		}
 		tmuxVer, _ := keybindings.TmuxVersion(ctx)
-		tmuxConf := keybindings.Generate(leader, tmuxVer)
+		tmuxConf := keybindings.Generate(leader, tmuxVer, direct)
 		if err := os.WriteFile(tmuxConfPath, []byte(tmuxConf), 0o644); err != nil {
 			return fmt.Errorf("writing tmux.conf: %w", err)
 		}

@@ -10,6 +10,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var keybindingsDirect bool
+
 var keybindingsCmd = &cobra.Command{
 	Use:   "keybindings",
 	Short: "Regenerate tmux keybindings and reload",
@@ -22,8 +24,26 @@ var keybindingsCmd = &cobra.Command{
 			leader = keybindings.DefaultLeader
 		}
 
+		// Resolve direct mode: flag overrides saved preference
+		direct := keybindingsDirect
+		if cmd.Flags().Changed("direct") {
+			// Persist the preference
+			val := "false"
+			if direct {
+				val = "true"
+			}
+			if err := app.ConfigRepo.Set(ctx, "keybinding_direct", val); err != nil {
+				return fmt.Errorf("saving direct preference: %w", err)
+			}
+		} else {
+			// Load saved preference
+			if saved, _ := app.ConfigRepo.Get(ctx, "keybinding_direct"); saved == "true" {
+				direct = true
+			}
+		}
+
 		tmuxVer, _ := keybindings.TmuxVersion(ctx)
-		content := keybindings.Generate(leader, tmuxVer)
+		content := keybindings.Generate(leader, tmuxVer, direct)
 
 		tmuxConfPath := filepath.Join(app.HiveDir, "tmux.conf")
 		if err := os.WriteFile(tmuxConfPath, []byte(content), 0o644); err != nil {
@@ -36,8 +56,12 @@ var keybindingsCmd = &cobra.Command{
 			fmt.Println("Keybindings reloaded into tmux")
 		}
 
-		fmt.Println()
-		for _, b := range keybindings.Bindings(leader) {
+		if direct {
+			fmt.Println("\nMode: direct (single keystroke after prefix)")
+		} else {
+			fmt.Printf("\nMode: table (<prefix> %s, then key)\n", leader)
+		}
+		for _, b := range keybindings.Bindings(leader, direct) {
 			fmt.Printf("  %s\n", b)
 		}
 		return nil
@@ -45,5 +69,6 @@ var keybindingsCmd = &cobra.Command{
 }
 
 func init() {
+	keybindingsCmd.Flags().BoolVar(&keybindingsDirect, "direct", false, "Bind directly to <prefix> <key> instead of using a hive key table")
 	rootCmd.AddCommand(keybindingsCmd)
 }
