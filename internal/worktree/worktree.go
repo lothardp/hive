@@ -88,6 +88,34 @@ func (m *Manager) Remove(ctx context.Context, repoDir, wtPath string) error {
 	return nil
 }
 
+// DeleteBranch deletes a local git branch. It refuses to delete the default
+// branch (main/master) or the currently checked-out branch.
+func (m *Manager) DeleteBranch(ctx context.Context, repoDir, branch string) error {
+	if branch == "main" || branch == "master" {
+		return fmt.Errorf("refusing to delete default branch %q", branch)
+	}
+
+	// Check we're not on that branch
+	res, err := shell.RunInDir(ctx, repoDir, "git", "symbolic-ref", "--short", "HEAD")
+	if err == nil && res.ExitCode == 0 {
+		current := strings.TrimSpace(res.Stdout)
+		if current == branch {
+			return fmt.Errorf("branch %q is currently checked out", branch)
+		}
+	}
+
+	res, err = shell.RunInDir(ctx, repoDir, "git", "branch", "-d", branch)
+	if err != nil {
+		return fmt.Errorf("deleting branch: %w", err)
+	}
+	if res.ExitCode != 0 {
+		return fmt.Errorf("deleting branch %q: %s", branch, strings.TrimSpace(res.Stderr))
+	}
+
+	slog.Debug("deleted branch", "branch", branch)
+	return nil
+}
+
 // DetectProject returns the project name from the git remote origin URL,
 // falling back to the directory name.
 func DetectProject(ctx context.Context, repoDir string) (string, error) {

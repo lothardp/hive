@@ -39,6 +39,11 @@ var killCmd = &cobra.Command{
 			return fmt.Errorf("removing worktree: %w", err)
 		}
 
+		// Delete branch (best-effort — skip if it's the current branch or default branch)
+		if err := app.WtMgr.DeleteBranch(ctx, app.RepoDir, cell.Branch); err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: failed to delete branch %q: %v\n", cell.Branch, err)
+		}
+
 		// Delete from state
 		if err := app.Repo.Delete(ctx, name); err != nil {
 			return fmt.Errorf("deleting cell record: %w", err)
