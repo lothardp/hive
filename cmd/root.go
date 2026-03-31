@@ -66,6 +66,14 @@ var rootCmd = &cobra.Command{
 		ctx := cmd.Context()
 		repoDir, err := worktree.DetectRepoRoot(ctx)
 		if err == nil {
+			// If inside a child cell, use the queen's dir for repo/config lookup
+			// so that DB-first config resolves to the registered repo path.
+			// TODO: For worktrees accessed outside of Hive tmux sessions (where
+			// HIVE_QUEEN_DIR is not set), consider using git rev-parse
+			// --git-common-dir to resolve back to the main repo root.
+			if queenDir := os.Getenv("HIVE_QUEEN_DIR"); queenDir != "" {
+				repoDir = queenDir
+			}
 			app.RepoDir = repoDir
 
 			project, err := worktree.DetectProject(ctx, repoDir)
