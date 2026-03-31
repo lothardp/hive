@@ -47,6 +47,38 @@ Per-repo hooks that run when a new cell is created. Configured during `hive setu
 - Run install commands (`npm install`, `bundle install`, etc.).
 - Symlink shared build caches or artifact directories.
 
+## Cell Layout
+
+Per-repo tmux layout configuration. When `hive cell` creates a session, it builds tabs and panes from the repo's layout config instead of just opening a single shell.
+
+Layout is stored in the DB as part of the repo config (set during `hive setup`). Example structure:
+
+```yaml
+layout:
+  tabs:
+    - name: editor
+      command: nvim .
+    - name: server
+      command: npm run dev
+    - name: tests
+      panes:
+        - command: npm run test:watch
+        - command: ""              # empty shell
+      split: horizontal
+    - name: shell                  # no command = plain shell
+```
+
+Rules:
+- If no layout is configured, default behavior: one tab, no command (plain shell).
+- Each tab becomes a tmux window. First tab is selected by default.
+- `command` on a tab runs in the single pane. If `panes` is set, `command` is ignored.
+- `panes` splits the window. `split` is `horizontal` (side-by-side) or `vertical` (top/bottom, default).
+- Max two panes per tab — no nested splits. If you need more, make another tab.
+- Commands run from the cell's worktree root.
+- Empty or missing `command` means a plain shell.
+
+---
+
 ## Port Allocation & Environment Variables
 
 Hive manages port ranges and injects env vars per cell:
