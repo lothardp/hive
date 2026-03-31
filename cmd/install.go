@@ -47,39 +47,56 @@ var installCmd = &cobra.Command{
 		// Check if tmux.conf is sourced
 		printTmuxInstructions(tmuxConfPath)
 
-		// Prompt for projects directory
 		home, _ := os.UserHomeDir()
-		defaultDir := filepath.Join(home, "side_projects")
 
-		// Use existing value as default if set
+		// Prompt for cells directory (where worktrees are created)
+		defaultCellsDir := filepath.Join(home, ".hive", "cells")
+		existingCellsDir, _ := app.ConfigRepo.Get(ctx, "cells_dir")
+		if existingCellsDir != "" {
+			defaultCellsDir = existingCellsDir
+		}
+
+		fmt.Printf("\nCells directory (where worktrees are created) [%s]: ", defaultCellsDir)
+		cellsInput, _ := reader.ReadString('\n')
+		cellsInput = strings.TrimSpace(cellsInput)
+		if cellsInput == "" {
+			cellsInput = defaultCellsDir
+		}
+		if strings.HasPrefix(cellsInput, "~/") {
+			cellsInput = filepath.Join(home, cellsInput[2:])
+		}
+
+		if _, err := os.Stat(cellsInput); os.IsNotExist(err) {
+			fmt.Printf("Directory %s does not exist. Create it? [Y/n] ", cellsInput)
+			answer, _ := reader.ReadString('\n')
+			answer = strings.TrimSpace(strings.ToLower(answer))
+			if answer == "" || answer == "y" {
+				if err := os.MkdirAll(cellsInput, 0o755); err != nil {
+					return fmt.Errorf("creating cells directory: %w", err)
+				}
+				fmt.Printf("Created %s\n", cellsInput)
+			}
+		}
+
+		if err := app.ConfigRepo.Set(ctx, "cells_dir", cellsInput); err != nil {
+			return fmt.Errorf("saving cells directory: %w", err)
+		}
+
+		// Prompt for projects directory (hint for repo discovery)
+		defaultDir := filepath.Join(home, "side_projects")
 		existing, _ := app.ConfigRepo.Get(ctx, "projects_dir")
 		if existing != "" {
 			defaultDir = existing
 		}
 
-		fmt.Printf("\nProjects directory [%s]: ", defaultDir)
+		fmt.Printf("Projects directory (where your repos live) [%s]: ", defaultDir)
 		input, _ := reader.ReadString('\n')
 		input = strings.TrimSpace(input)
 		if input == "" {
 			input = defaultDir
 		}
-
-		// Expand ~ if present
 		if strings.HasPrefix(input, "~/") {
 			input = filepath.Join(home, input[2:])
-		}
-
-		// Create if it doesn't exist
-		if _, err := os.Stat(input); os.IsNotExist(err) {
-			fmt.Printf("Directory %s does not exist. Create it? [Y/n] ", input)
-			answer, _ := reader.ReadString('\n')
-			answer = strings.TrimSpace(strings.ToLower(answer))
-			if answer == "" || answer == "y" {
-				if err := os.MkdirAll(input, 0o755); err != nil {
-					return fmt.Errorf("creating projects directory: %w", err)
-				}
-				fmt.Printf("Created %s\n", input)
-			}
 		}
 
 		if err := app.ConfigRepo.Set(ctx, "projects_dir", input); err != nil {
@@ -93,6 +110,7 @@ var installCmd = &cobra.Command{
 
 		fmt.Println("\nHive installed successfully!")
 		fmt.Printf("  Config:   %s/state.db\n", app.HiveDir)
+		fmt.Printf("  Cells:    %s\n", cellsInput)
 		fmt.Printf("  Projects: %s\n", input)
 		return nil
 	},

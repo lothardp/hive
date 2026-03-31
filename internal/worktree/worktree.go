@@ -24,7 +24,7 @@ func DefaultBaseDir() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("getting home directory: %w", err)
 	}
-	return filepath.Join(home, "workspaces"), nil
+	return filepath.Join(home, ".hive", "cells"), nil
 }
 
 // Create creates a git worktree at BaseDir/<project>/<name>.

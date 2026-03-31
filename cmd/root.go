@@ -86,13 +86,13 @@ var rootCmd = &cobra.Command{
 			}
 		}
 
-		// Set up worktree manager — use projects_dir from DB if set
+		// Set up worktree manager — use cells_dir from DB if set
 		baseDir, err := worktree.DefaultBaseDir()
 		if err != nil {
-			return fmt.Errorf("getting workspace base dir: %w", err)
+			return fmt.Errorf("getting cells base dir: %w", err)
 		}
-		if projectsDir, err := app.ConfigRepo.Get(ctx, "projects_dir"); err == nil && projectsDir != "" {
-			baseDir = projectsDir
+		if cellsDir, err := app.ConfigRepo.Get(ctx, "cells_dir"); err == nil && cellsDir != "" {
+			baseDir = cellsDir
 		}
 		app.WtMgr = worktree.NewManager(baseDir)
 		app.TmuxMgr = tmux.NewManager()
