@@ -40,6 +40,17 @@ URL-based routing for cells that run web services.
 - `hive down` removes the route
 - Complements port allocation — ports for simple setups, proxy for full web stacks
 
+## `hive config edit` — Interactive Config Editing
+
+Open the current repo's config (from DB) as editable YAML in `$EDITOR` (default: vim):
+
+- Read the stored JSON config for the current repo from SQLite
+- Convert to YAML and write to a temp file
+- Open the temp file in the user's editor and wait for it to close
+- On save: validate the YAML, diff against the original, and apply changes if valid
+- On invalid YAML or schema errors: show the error and re-open the editor (or abort)
+- `hive config edit --global` — same flow but for global config from `global_config` table
+
 ## Future — Global Setup Hooks
 
 Global hooks that run for every cell regardless of repo (e.g., always set up a shared tool, always copy a global .gitconfig). Same ordered shell command strings as repo hooks, but stored at the global level. Repo hooks run after global hooks.
