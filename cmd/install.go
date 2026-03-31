@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lothardp/hive/internal/keybindings"
+	"github.com/lothardp/hive/internal/shell"
 	"github.com/spf13/cobra"
 )
 
@@ -32,16 +34,22 @@ var installCmd = &cobra.Command{
 
 		fmt.Printf("Hive directory: %s\n", app.HiveDir)
 
-		// Generate tmux.conf
+		// Generate tmux.conf with keybindings
 		tmuxConfPath := filepath.Join(app.HiveDir, "tmux.conf")
-		if _, err := os.Stat(tmuxConfPath); os.IsNotExist(err) {
-			tmuxConf := "# Hive tmux configuration\n# This file is managed by Hive. Manual edits may be overwritten.\n#\n# Keybindings will be added here by future Hive versions.\n"
-			if err := os.WriteFile(tmuxConfPath, []byte(tmuxConf), 0o644); err != nil {
-				return fmt.Errorf("writing tmux.conf: %w", err)
-			}
-			fmt.Printf("Created %s\n", tmuxConfPath)
-		} else {
-			fmt.Printf("Tmux config already exists: %s\n", tmuxConfPath)
+		leader, _ := app.ConfigRepo.Get(ctx, "keybinding_leader")
+		if leader == "" {
+			leader = keybindings.DefaultLeader
+		}
+		tmuxVer, _ := keybindings.TmuxVersion(ctx)
+		tmuxConf := keybindings.Generate(leader, tmuxVer)
+		if err := os.WriteFile(tmuxConfPath, []byte(tmuxConf), 0o644); err != nil {
+			return fmt.Errorf("writing tmux.conf: %w", err)
+		}
+		fmt.Printf("Wrote %s\n", tmuxConfPath)
+
+		// Best-effort reload into tmux
+		if res, err := shell.Run(ctx, "tmux", "source-file", tmuxConfPath); err == nil && res.ExitCode == 0 {
+			fmt.Println("Keybindings loaded into tmux")
 		}
 
 		// Check if tmux.conf is sourced

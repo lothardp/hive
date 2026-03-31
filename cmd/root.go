@@ -15,6 +15,7 @@ import (
 	"github.com/lothardp/hive/internal/tmux"
 	"github.com/lothardp/hive/internal/worktree"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 type App struct {
@@ -142,6 +143,21 @@ func init() {
 
 func Execute() error {
 	return rootCmd.Execute()
+}
+
+// waitForKeypress puts the terminal in raw mode and waits for a single keypress.
+func waitForKeypress() {
+	fmt.Println("\nPress any key to close")
+	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
+	if err != nil {
+		// Fallback: just wait for Enter
+		buf := make([]byte, 1)
+		_, _ = os.Stdin.Read(buf)
+		return
+	}
+	defer term.Restore(int(os.Stdin.Fd()), oldState)
+	buf := make([]byte, 1)
+	_, _ = os.Stdin.Read(buf)
 }
 
 func queenCurrentBranch(ctx context.Context, dir string) (string, error) {

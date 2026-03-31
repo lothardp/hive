@@ -1,20 +1,46 @@
 package cmd
 
 import (
+	"bufio"
 	"fmt"
+	"os"
+	"strings"
 
+	"github.com/lothardp/hive/internal/shell"
 	"github.com/lothardp/hive/internal/state"
 	"github.com/spf13/cobra"
 )
 
+var killCurrent bool
+
 var killCmd = &cobra.Command{
-	Use:               "kill <name>",
+	Use:               "kill [name]",
 	Short:             "Tear down everything: containers, proxy, worktree, tmux session",
-	Args:              cobra.ExactArgs(1),
+	Args:              cobra.MaximumNArgs(1),
 	ValidArgsFunction: completeCellNames,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
-		name := args[0]
+
+		var name string
+		if killCurrent {
+			name = os.Getenv("HIVE_CELL")
+			if name == "" {
+				return fmt.Errorf("not in a Hive cell (HIVE_CELL not set)")
+			}
+			// Confirm interactively
+			fmt.Printf("Kill cell %q? [y/N] ", name)
+			reader := bufio.NewReader(os.Stdin)
+			answer, _ := reader.ReadString('\n')
+			if strings.TrimSpace(strings.ToLower(answer)) != "y" {
+				fmt.Println("Cancelled")
+				return nil
+			}
+		} else {
+			if len(args) == 0 {
+				return fmt.Errorf("cell name required (or use --current)")
+			}
+			name = args[0]
+		}
 
 		cell, err := app.Repo.GetByName(ctx, name)
 		if err != nil {
@@ -22,6 +48,14 @@ var killCmd = &cobra.Command{
 		}
 		if cell == nil {
 			return fmt.Errorf("cell %q not found", name)
+		}
+
+		// When killing current cell, switch to queen first so user lands somewhere safe
+		if killCurrent {
+			queenName := os.Getenv("HIVE_QUEEN")
+			if queenName != "" && name != queenName {
+				_, _ = shell.Run(ctx, "tmux", "switch-client", "-t", queenName)
+			}
 		}
 
 		// Queen: refuse to kill if other cells exist for the project
@@ -89,5 +123,6 @@ var killCmd = &cobra.Command{
 }
 
 func init() {
+	killCmd.Flags().BoolVar(&killCurrent, "current", false, "Kill the current cell (reads HIVE_CELL from env)")
 	rootCmd.AddCommand(killCmd)
 }

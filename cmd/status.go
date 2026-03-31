@@ -14,6 +14,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var statusPersist bool
+
 var statusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show overview of all cells (the comb)",
@@ -66,6 +68,10 @@ var statusCmd = &cobra.Command{
 		}
 
 		w.Flush()
+
+		if statusPersist {
+			waitForKeypress()
+		}
 		return nil
 	},
 }
@@ -108,5 +114,6 @@ func formatPortsColumn(portsJSON string) string {
 }
 
 func init() {
+	statusCmd.Flags().BoolVar(&statusPersist, "persist", false, "Wait for a keypress before exiting (for tmux popups)")
 	rootCmd.AddCommand(statusCmd)
 }

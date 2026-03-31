@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -19,17 +20,36 @@ import (
 )
 
 var (
-	cellBranch   string
-	cellHeadless bool
+	cellBranch      string
+	cellHeadless    bool
+	cellInteractive bool
 )
 
 var cellCmd = &cobra.Command{
-	Use:   "cell <name> [dir]",
+	Use:   "cell [name] [dir]",
 	Short: "Create a new cell (worktree + tmux session)",
-	Args:  cobra.RangeArgs(1, 2),
+	Args:  cobra.RangeArgs(0, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
-		rawName := args[0]
+
+		var rawName string
+		if cellInteractive {
+			if len(args) > 0 {
+				return fmt.Errorf("--interactive and positional name cannot be used together")
+			}
+			fmt.Print("Cell name: ")
+			reader := bufio.NewReader(os.Stdin)
+			input, _ := reader.ReadString('\n')
+			rawName = strings.TrimSpace(input)
+			if rawName == "" {
+				return fmt.Errorf("cell name cannot be empty")
+			}
+		} else {
+			if len(args) == 0 {
+				return fmt.Errorf("cell name required (or use --interactive)")
+			}
+			rawName = args[0]
+		}
 
 		// Headless path — no worktree, no git repo required, no prefix
 		if cellHeadless {
@@ -119,10 +139,11 @@ var cellCmd = &cobra.Command{
 		envVars := envars.BuildVars(allocatedPorts, staticEnv)
 		envVars["HIVE_CELL"] = name
 
-		// Inject HIVE_QUEEN_DIR if queen exists
+		// Inject HIVE_QUEEN_DIR and HIVE_QUEEN if queen exists
 		queen, err := app.Repo.GetQueen(ctx, app.Project)
 		if err == nil && queen != nil {
 			envVars["HIVE_QUEEN_DIR"] = queen.WorktreePath
+			envVars["HIVE_QUEEN"] = queen.Name
 		}
 
 		// Create tmux session with env vars baked in
@@ -172,6 +193,9 @@ var cellCmd = &cobra.Command{
 		}
 		if layoutSummary != "" {
 			fmt.Printf("  Layout:   %s\n", layoutSummary)
+		}
+		if cellInteractive {
+			waitForKeypress()
 		}
 		return nil
 	},
@@ -357,5 +381,6 @@ func formatPorts(ports map[string]int) string {
 func init() {
 	cellCmd.Flags().StringVarP(&cellBranch, "branch", "b", "", "Git branch name (defaults to cell name)")
 	cellCmd.Flags().BoolVar(&cellHeadless, "headless", false, "Create a tmux session without a git worktree")
+	cellCmd.Flags().BoolVarP(&cellInteractive, "interactive", "i", false, "Prompt for cell name (for tmux popups)")
 	rootCmd.AddCommand(cellCmd)
 }
