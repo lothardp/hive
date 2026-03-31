@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -45,4 +46,29 @@ func (c *ProjectConfig) applyDefaults() {
 	if c.Env == nil {
 		c.Env = make(map[string]string)
 	}
+}
+
+func (c *ProjectConfig) ToJSON() (string, error) {
+	data, err := json.Marshal(c)
+	if err != nil {
+		return "", fmt.Errorf("marshaling config to JSON: %w", err)
+	}
+	return string(data), nil
+}
+
+func ProjectConfigFromJSON(data string) (*ProjectConfig, error) {
+	var cfg ProjectConfig
+	if err := json.Unmarshal([]byte(data), &cfg); err != nil {
+		return nil, fmt.Errorf("parsing config JSON: %w", err)
+	}
+	cfg.applyDefaults()
+	return &cfg, nil
+}
+
+func (c *ProjectConfig) ToYAML() ([]byte, error) {
+	data, err := yaml.Marshal(c)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling config to YAML: %w", err)
+	}
+	return data, nil
 }

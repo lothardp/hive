@@ -31,6 +31,24 @@ CREATE TABLE IF NOT EXISTS notifications (
 	created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 	FOREIGN KEY (cell_name) REFERENCES cells(name) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS global_config (
+	key   TEXT PRIMARY KEY,
+	value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS repos (
+	id             INTEGER PRIMARY KEY AUTOINCREMENT,
+	name           TEXT UNIQUE NOT NULL,
+	path           TEXT UNIQUE NOT NULL,
+	remote_url     TEXT NOT NULL DEFAULT '',
+	default_branch TEXT NOT NULL DEFAULT 'main',
+	config         TEXT NOT NULL DEFAULT '{}',
+	created_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	updated_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_repos_path ON repos(path);
 `
 
 func Open(path string) (*sql.DB, error) {

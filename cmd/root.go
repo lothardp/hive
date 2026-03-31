@@ -15,15 +15,18 @@ import (
 )
 
 type App struct {
-	DB       *sql.DB
-	Repo     *state.CellRepository
-	Config   *config.ProjectConfig
-	HiveDir  string
-	RepoDir  string
-	Project  string
-	Verbose  bool
-	WtMgr    *worktree.Manager
-	TmuxMgr  *tmux.Manager
+	DB         *sql.DB
+	Repo       *state.CellRepository
+	ConfigRepo *state.ConfigRepository
+	RepoRepo   *state.RepoRepository
+	Config     *config.ProjectConfig
+	RepoRecord *state.Repo // registered repo for current dir, or nil
+	HiveDir    string
+	RepoDir    string
+	Project    string
+	Verbose    bool
+	WtMgr      *worktree.Manager
+	TmuxMgr    *tmux.Manager
 }
 
 var app App
@@ -53,24 +56,43 @@ var rootCmd = &cobra.Command{
 		}
 		app.DB = db
 		app.Repo = state.NewCellRepository(db)
+		app.ConfigRepo = state.NewConfigRepository(db)
+		app.RepoRepo = state.NewRepoRepository(db)
 
 		// Detect git repo — not required for all commands
 		ctx := cmd.Context()
 		repoDir, err := worktree.DetectRepoRoot(ctx)
 		if err == nil {
 			app.RepoDir = repoDir
-			app.Config = config.LoadOrDefault(repoDir)
 
 			project, err := worktree.DetectProject(ctx, repoDir)
 			if err == nil {
 				app.Project = project
 			}
+
+			// DB-first config: look up registered repo, fall back to .hive.yaml
+			repoRecord, err := app.RepoRepo.GetByPath(ctx, repoDir)
+			if err == nil && repoRecord != nil {
+				app.RepoRecord = repoRecord
+				cfg, err := config.ProjectConfigFromJSON(repoRecord.Config)
+				if err == nil {
+					app.Config = cfg
+				} else {
+					slog.Warn("failed to parse repo config from DB, using defaults", "error", err)
+					app.Config = config.LoadOrDefault(repoDir)
+				}
+			} else {
+				app.Config = config.LoadOrDefault(repoDir)
+			}
 		}
 
-		// Set up worktree manager
+		// Set up worktree manager — use projects_dir from DB if set
 		baseDir, err := worktree.DefaultBaseDir()
 		if err != nil {
 			return fmt.Errorf("getting workspace base dir: %w", err)
+		}
+		if projectsDir, err := app.ConfigRepo.Get(ctx, "projects_dir"); err == nil && projectsDir != "" {
+			baseDir = projectsDir
 		}
 		app.WtMgr = worktree.NewManager(baseDir)
 		app.TmuxMgr = tmux.NewManager()
