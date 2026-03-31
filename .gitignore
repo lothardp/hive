@@ -16,4 +16,8 @@ vendor/
 # Hive local state
 .claude/settings.local.json
 
+# claude stuff
 .claude
+
+# tmp files
+tmp
