@@ -45,19 +45,26 @@ New package `internal/hooks/hooks.go`:
 ```go
 type Runner struct{}
 
-func (r *Runner) Run(ctx context.Context, workDir string, hooks []string) []HookError
+func (r *Runner) Run(ctx context.Context, workDir string, hooks []string) *Result
+
+type Result struct {
+    Ran    int    // how many hooks executed (including the failed one)
+    Total  int    // total hooks configured
+    Failed *HookError // nil if all passed
+}
 
 type HookError struct {
     Command string
+    Index   int
     Stderr  string
     Err     error
 }
 ```
 
 - Run each hook sequentially via `shell.RunInDir(ctx, workDir, "sh", "-c", command)`
-- Collect failures but keep going (warn, don't abort)
-- If any hook fails, write `hook_errors.txt` to the worktree root with command, stderr, and exit code
-- Return errors to caller for display
+- On first failure, **stop immediately** — later hooks may depend on earlier ones
+- Write `hook_results.txt` to the worktree root with outcome of each hook that ran, plus the error details for the failed one
+- Return result to caller for display
 
 ### Integration into `hive cell`
 
@@ -72,7 +79,7 @@ In `cmd/cell.go`, after tmux session creation and before the success message:
 6. Print summary          (existing)
 ```
 
-If hooks fail, print warnings but don't roll back. The cell is still usable.
+If hooks fail, print a warning but don't roll back. The cell is still created and usable.
 
 ### CLI output
 
@@ -85,7 +92,7 @@ Cell "my-feature" created
   Hooks:    3/3 passed
 
 # or on failure:
-  Hooks:    2/3 passed (see hook_errors.txt)
+  Hooks:    2/3 failed at hook 2 (see hook_results.txt)
 ```
 
 ---
