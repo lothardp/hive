@@ -78,6 +78,25 @@ func (m *Manager) KillSession(ctx context.Context, name string) error {
 	return nil
 }
 
+// ListSessions returns the names of all running tmux sessions.
+func (m *Manager) ListSessions(ctx context.Context) ([]string, error) {
+	res, err := shell.Run(ctx, "tmux", "list-sessions", "-F", "#{session_name}")
+	if err != nil {
+		return nil, fmt.Errorf("listing tmux sessions: %w", err)
+	}
+	if res.ExitCode != 0 {
+		// No server running = no sessions
+		return nil, nil
+	}
+	var names []string
+	for _, line := range strings.Split(strings.TrimSpace(res.Stdout), "\n") {
+		if line != "" {
+			names = append(names, line)
+		}
+	}
+	return names, nil
+}
+
 func findTmux() (string, error) {
 	res, err := shell.Run(context.Background(), "which", "tmux")
 	if err != nil || res.ExitCode != 0 {

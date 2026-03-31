@@ -30,13 +30,14 @@ var (
 	confirmStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Bold(true)
 )
 
-// row is one line in the tree view — either a project header or a cell.
+// row is one line in the tree view — a project header, a cell, or an unmanaged tmux session.
 type row struct {
-	isProject bool
-	project   string
-	cell      *state.Cell
-	tmuxAlive bool
-	unread    int
+	isProject   bool
+	project     string
+	cell        *state.Cell
+	tmuxAlive   bool
+	unread      int
+	tmuxSession string // non-empty for unmanaged tmux sessions (cell is nil)
 }
 
 // Model is the Bubble Tea model for the dashboard.
@@ -171,10 +172,17 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case key.Matches(msg, keys.Enter):
-		if r := m.selectedRow(); r != nil && r.cell != nil {
-			m.SwitchTarget = r.cell.Name
-			m.quitting = true
-			return m, tea.Quit
+		if r := m.selectedRow(); r != nil {
+			if r.cell != nil {
+				m.SwitchTarget = r.cell.Name
+				m.quitting = true
+				return m, tea.Quit
+			}
+			if r.tmuxSession != "" {
+				m.SwitchTarget = r.tmuxSession
+				m.quitting = true
+				return m, tea.Quit
+			}
 		}
 		return m, nil
 
@@ -270,6 +278,19 @@ func (m Model) View() string {
 			} else {
 				b.WriteString(projectStyle.Render(line))
 			}
+			b.WriteString("\n")
+			continue
+		}
+
+		// Unmanaged tmux session
+		if r.tmuxSession != "" {
+			line := fmt.Sprintf("      %-28s %-20s %s", r.tmuxSession, "", statusAlive.Render("●"))
+			if selected {
+				line = selectedStyle.Render(line)
+			} else {
+				line = headlessStyle.Render(line)
+			}
+			b.WriteString(line)
 			b.WriteString("\n")
 			continue
 		}
@@ -371,6 +392,12 @@ func (m Model) loadCells() tea.Msg {
 	}
 	sort.Strings(projects)
 
+	// Track cell names to find unmanaged tmux sessions
+	cellNames := make(map[string]bool, len(cells))
+	for _, c := range cells {
+		cellNames[c.Name] = true
+	}
+
 	var rows []row
 	for _, p := range projects {
 		rows = append(rows, row{isProject: true, project: p})
@@ -387,6 +414,23 @@ func (m Model) loadCells() tea.Msg {
 			rows = append(rows, row{cell: &c, tmuxAlive: alive, unread: unread})
 		}
 	}
+
+	// Discover unmanaged tmux sessions
+	allSessions, _ := m.tmuxMgr.ListSessions(ctx)
+	var unmanaged []string
+	for _, s := range allSessions {
+		if !cellNames[s] {
+			unmanaged = append(unmanaged, s)
+		}
+	}
+	if len(unmanaged) > 0 {
+		sort.Strings(unmanaged)
+		rows = append(rows, row{isProject: true, project: "Other tmux sessions"})
+		for _, s := range unmanaged {
+			rows = append(rows, row{tmuxSession: s, tmuxAlive: true})
+		}
+	}
+
 	return cellsLoaded{rows: rows}
 }
 
