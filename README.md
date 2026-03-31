@@ -11,15 +11,19 @@ Hive creates **cells** — isolated dev environments that combine:
 - A **Git Worktree** (separate filesystem per branch, no conflicts)
 - A **tmux session** (dedicated terminal, easy to switch between)
 - **State tracking** in SQLite (know what's running, where, and on which branch)
+- **Port allocation** (unique ports per cell, no conflicts)
+- **Setup hooks** (auto-run scripts on cell creation)
 
 ```
-~/workspaces/myproject/
+~/.hive/cells/myproject/
 ├── feat-auth/       # cell: feat-auth (branch: feat-auth)
 ├── fix-api-bug/     # cell: fix-api-bug (branch: fix-api-bug)
 └── refactor-db/     # cell: refactor-db (branch: refactor-db)
 ```
 
 Each cell is fully independent. No shared `node_modules`, no port conflicts, no stepping on each other's toes.
+
+Hive also supports **queen sessions** (a read-only environment on your default branch, auto-created with your first cell) and **headless cells** (quick tmux sessions in any directory, no git worktree needed).
 
 ## Installation
 
@@ -44,16 +48,36 @@ Move the binary somewhere in your `PATH`:
 mv hive /usr/local/bin/
 ```
 
-## Usage
+## Getting Started
 
-### Create a Cell
+### First-Time Setup
+
+```bash
+hive install                  # Configure cells directory, projects directory, tmux integration
+```
+
+### Register a Repo
 
 From inside a git repo:
 
 ```bash
+hive setup                    # Interactive: project name, remote, default branch, config
+```
+
+## Usage
+
+### Create a Cell
+
+From inside a registered (or any git) repo:
+
+```bash
 hive cell my-feature          # Creates worktree + tmux on a new branch
 hive cell bugfix -b main      # Creates worktree from existing branch
+hive cell scratch --headless  # Tmux session in current dir, no worktree
+hive cell notes --headless ~/notes  # Tmux session in a specific directory
 ```
+
+On your first cell for a project, Hive automatically creates a **queen session** — a protected environment on the default branch.
 
 ### Navigate Cells
 
@@ -64,20 +88,34 @@ hive status                   # List all cells
 ```
 
 ```
-NAME           PROJECT    BRANCH         STATUS    TMUX    AGE
-my-feature     myapp      my-feature     running   alive   2h
-bugfix         myapp      main           running   alive   15m
+NAME                PROJECT    BRANCH         STATUS    TMUX    PORTS      AGE
+myapp-queen [queen] myapp      main           stopped   alive   -          2h
+my-feature          myapp      my-feature     stopped   alive   3001,5433  2h
+bugfix              myapp      main           stopped   alive   3002,5434  15m
+scratch [headless]  -          -              stopped   alive   -          5m
 ```
 
 ### Clean Up
 
 ```bash
-hive kill my-feature          # Removes worktree, tmux session, and DB record
+hive kill my-feature          # Removes worktree, branch, tmux session, and DB record
 ```
+
+Queen sessions can't be killed while other cells exist for the project — kill the regular cells first.
 
 ## Configuration
 
-Create a `.hive.yaml` in your project root to configure per-repo behavior:
+Register your repo with `hive setup` for interactive configuration, or manage config with `hive config`:
+
+```bash
+hive config show              # Show effective config (DB or .hive.yaml)
+hive config export -f cfg.yaml  # Export to file
+hive config import -f cfg.yaml  # Import from file
+hive config apply -f patch.yaml # Merge partial config into existing
+hive config apply -f layouts.yaml --global  # Apply layouts globally
+```
+
+Config can live in the database (via `hive setup`) or in a `.hive.yaml` file in your project root. DB config takes precedence.
 
 ```yaml
 compose_path: docker-compose.yml
@@ -87,19 +125,45 @@ seed_scripts:
   - npm run db:migrate
 env:
   NODE_ENV: development
+port_vars:
+  - PORT
+  - DB_PORT
+hooks:
+  - cp ../.env .env
+  - npm install
+layouts:
+  default:
+    windows:
+      - name: editor
+        panes:
+          - command: nvim .
+      - name: server
+        panes:
+          - command: npm run dev
+          - command: npm run test:watch
+            split: horizontal
 ```
+
+### Port Allocation
+
+List the env var names you need in `port_vars`. Hive assigns unique ports (3001-9999) per cell and injects them as environment variables into the tmux session. No two cells will share a port.
+
+### Setup Hooks
+
+Commands listed in `hooks` run sequentially in the cell's worktree on creation. They receive the full cell environment (ports, static env, `HIVE_CELL`, `HIVE_QUEEN_DIR`). Execution aborts on the first failure.
+
+### Layouts
+
+Define tmux window/pane layouts in `layouts`. A layout named `"default"` is auto-applied when creating a cell. Layouts can be set per-repo or globally with `hive config apply --global`.
 
 ## Roadmap
 
-- **Repo registration** (`hive setup`) — guided onboarding per repo
-- **Setup hooks** — auto-run scripts on cell creation (copy deps, env files)
-- **Port allocation** — auto-assign unique ports per cell, injected as env vars
 - **Service management** (`hive up/down/stop`) — start/stop project services per cell
 - **Reverse proxy** — `<cell>.dev.local` URL routing via Caddy
+- **Tmux keybindings** — quick-access Hive commands from within tmux
 - **TUI dashboard** — interactive terminal UI as the default `hive` command
 - **Notifications** — agents can notify you from inside cells
-- **Queen sessions** — read-only main branch environment per repo
-- **Headless cells** — quick scratch tmux sessions without git
+- **Background tasks** — periodic git fetch and other cron-style operations
 
 ## License
 
