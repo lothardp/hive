@@ -53,6 +53,9 @@ var statusCmd = &cobra.Command{
 			case state.TypeHeadless:
 				nameDisplay += " [headless]"
 			}
+			if unread, err := app.NotifRepo.CountUnread(ctx, c.Name); err == nil && unread > 0 {
+				nameDisplay += fmt.Sprintf(" (%d unread)", unread)
+			}
 
 			project := c.Project
 			if project == "" {

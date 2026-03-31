@@ -23,6 +23,7 @@ type App struct {
 	Repo       *state.CellRepository
 	ConfigRepo *state.ConfigRepository
 	RepoRepo   *state.RepoRepository
+	NotifRepo  *state.NotificationRepository
 	Config     *config.ProjectConfig
 	RepoRecord *state.Repo // registered repo for current dir, or nil
 	HiveDir    string
@@ -62,6 +63,7 @@ var rootCmd = &cobra.Command{
 		app.Repo = state.NewCellRepository(db)
 		app.ConfigRepo = state.NewConfigRepository(db)
 		app.RepoRepo = state.NewRepoRepository(db)
+		app.NotifRepo = state.NewNotificationRepository(db)
 
 		// Detect git repo — not required for all commands
 		ctx := cmd.Context()

@@ -32,6 +32,16 @@ type Cell struct {
 	UpdatedAt    time.Time
 }
 
+type Notification struct {
+	ID        int64
+	CellName  string
+	Title     string
+	Message   string
+	Details   string
+	Read      bool
+	CreatedAt time.Time
+}
+
 type Repo struct {
 	ID            int64
 	Name          string
