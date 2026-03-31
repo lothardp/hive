@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/lothar/hive/internal/shell"
+	"github.com/lothardp/hive/internal/shell"
 )
 
 type Manager struct {

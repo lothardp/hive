@@ -1,4 +1,4 @@
-module github.com/lothar/hive
+module github.com/lothardp/hive
 
 go 1.25.0
 

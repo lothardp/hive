@@ -3,7 +3,7 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/lothar/hive/internal/state"
+	"github.com/lothardp/hive/internal/state"
 	"github.com/spf13/cobra"
 )
 

@@ -7,10 +7,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/lothar/hive/internal/config"
-	"github.com/lothar/hive/internal/state"
-	"github.com/lothar/hive/internal/tmux"
-	"github.com/lothar/hive/internal/worktree"
+	"github.com/lothardp/hive/internal/config"
+	"github.com/lothardp/hive/internal/state"
+	"github.com/lothardp/hive/internal/tmux"
+	"github.com/lothardp/hive/internal/worktree"
 	"github.com/spf13/cobra"
 )
 

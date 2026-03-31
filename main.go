@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/lothar/hive/cmd"
+	"github.com/lothardp/hive/cmd"
 )
 
 func main() {
