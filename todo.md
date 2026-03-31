@@ -22,6 +22,24 @@ Before registering, scan the repo for things that break in isolated worktrees:
 
 Print warnings with suggested fixes (e.g., "consider adding a seed script to copy .env.local").
 
+## Service Management (was Phase 8)
+
+Start and stop project services per cell.
+
+- `hive up <name>` — start services (could be Docker Compose, could be something else)
+- `hive down <name>` — stop services and clean up
+- `hive stop <name>` — suspend services (keep cell alive)
+- Health check polling — wait for services to be ready
+
+## Reverse Proxy (was Phase 9)
+
+URL-based routing for cells that run web services.
+
+- `hive init-proxy` — start global Caddy container on a shared Docker network
+- `hive up` registers `<name>.dev.local` route via Caddy admin API
+- `hive down` removes the route
+- Complements port allocation — ports for simple setups, proxy for full web stacks
+
 ## Future — Global Setup Hooks
 
 Global hooks that run for every cell regardless of repo (e.g., always set up a shared tool, always copy a global .gitconfig). Same ordered shell command strings as repo hooks, but stored at the global level. Repo hooks run after global hooks.
