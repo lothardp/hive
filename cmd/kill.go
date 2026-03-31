@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 
+	"github.com/lothardp/hive/internal/state"
 	"github.com/spf13/cobra"
 )
 
@@ -22,6 +23,38 @@ var killCmd = &cobra.Command{
 			return fmt.Errorf("cell %q not found", name)
 		}
 
+		// Queen: refuse to kill if other cells exist for the project
+		if cell.Type == state.TypeQueen {
+			others, err := app.Repo.CountByProject(ctx, cell.Project, state.TypeQueen)
+			if err != nil {
+				return fmt.Errorf("checking project cells: %w", err)
+			}
+			if others > 0 {
+				return fmt.Errorf("cannot kill queen %q — %d other cell(s) still exist for project %q; kill them first", name, others, cell.Project)
+			}
+
+			if err := app.TmuxMgr.KillSession(ctx, name); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: failed to kill tmux session: %v\n", err)
+			}
+			if err := app.Repo.Delete(ctx, name); err != nil {
+				return fmt.Errorf("deleting cell record: %w", err)
+			}
+			fmt.Printf("Queen %q killed\n", name)
+			return nil
+		}
+
+		if cell.Type == state.TypeHeadless {
+			if err := app.TmuxMgr.KillSession(ctx, name); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: failed to kill tmux session: %v\n", err)
+			}
+			if err := app.Repo.Delete(ctx, name); err != nil {
+				return fmt.Errorf("deleting cell record: %w", err)
+			}
+			fmt.Printf("Headless cell %q killed\n", name)
+			return nil
+		}
+
+		// Normal cell path — requires git repo
 		if app.RepoDir == "" {
 			return fmt.Errorf("not in a git repository — run this from inside a project")
 		}

@@ -17,10 +17,13 @@ func NewCellRepository(db *sql.DB) *CellRepository {
 
 func (r *CellRepository) Create(ctx context.Context, cell *Cell) error {
 	now := time.Now()
+	if cell.Type == "" {
+		cell.Type = TypeNormal
+	}
 	result, err := r.db.ExecContext(ctx,
-		`INSERT INTO cells (name, project, branch, worktree_path, status, ports, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		cell.Name, cell.Project, cell.Branch, cell.WorktreePath, cell.Status, cell.Ports, now, now,
+		`INSERT INTO cells (name, project, branch, worktree_path, status, ports, type, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		cell.Name, cell.Project, cell.Branch, cell.WorktreePath, cell.Status, cell.Ports, cell.Type, now, now,
 	)
 	if err != nil {
 		return fmt.Errorf("inserting cell: %w", err)
@@ -37,7 +40,7 @@ func (r *CellRepository) Create(ctx context.Context, cell *Cell) error {
 
 func (r *CellRepository) GetByName(ctx context.Context, name string) (*Cell, error) {
 	row := r.db.QueryRowContext(ctx,
-		`SELECT id, name, project, branch, worktree_path, status, ports, created_at, updated_at
+		`SELECT id, name, project, branch, worktree_path, status, ports, type, created_at, updated_at
 		 FROM cells WHERE name = ?`, name,
 	)
 	return scanCell(row)
@@ -45,7 +48,7 @@ func (r *CellRepository) GetByName(ctx context.Context, name string) (*Cell, err
 
 func (r *CellRepository) List(ctx context.Context) ([]Cell, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, name, project, branch, worktree_path, status, ports, created_at, updated_at
+		`SELECT id, name, project, branch, worktree_path, status, ports, type, created_at, updated_at
 		 FROM cells ORDER BY created_at DESC`,
 	)
 	if err != nil {
@@ -57,7 +60,7 @@ func (r *CellRepository) List(ctx context.Context) ([]Cell, error) {
 
 func (r *CellRepository) ListByStatus(ctx context.Context, status CellStatus) ([]Cell, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, name, project, branch, worktree_path, status, ports, created_at, updated_at
+		`SELECT id, name, project, branch, worktree_path, status, ports, type, created_at, updated_at
 		 FROM cells WHERE status = ? ORDER BY created_at DESC`, status,
 	)
 	if err != nil {
@@ -65,6 +68,25 @@ func (r *CellRepository) ListByStatus(ctx context.Context, status CellStatus) ([
 	}
 	defer rows.Close()
 	return scanCells(rows)
+}
+
+func (r *CellRepository) GetQueen(ctx context.Context, project string) (*Cell, error) {
+	row := r.db.QueryRowContext(ctx,
+		`SELECT id, name, project, branch, worktree_path, status, ports, type, created_at, updated_at
+		 FROM cells WHERE project = ? AND type = 'queen'`, project,
+	)
+	return scanCell(row)
+}
+
+func (r *CellRepository) CountByProject(ctx context.Context, project string, excludeType CellType) (int, error) {
+	var count int
+	err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM cells WHERE project = ? AND type != ?`, project, excludeType,
+	).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("counting cells: %w", err)
+	}
+	return count, nil
 }
 
 func (r *CellRepository) UpdateStatus(ctx context.Context, name string, status CellStatus) error {
@@ -120,7 +142,7 @@ func (r *CellRepository) Delete(ctx context.Context, name string) error {
 
 func scanCell(row *sql.Row) (*Cell, error) {
 	var c Cell
-	err := row.Scan(&c.ID, &c.Name, &c.Project, &c.Branch, &c.WorktreePath, &c.Status, &c.Ports, &c.CreatedAt, &c.UpdatedAt)
+	err := row.Scan(&c.ID, &c.Name, &c.Project, &c.Branch, &c.WorktreePath, &c.Status, &c.Ports, &c.Type, &c.CreatedAt, &c.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -134,7 +156,7 @@ func scanCells(rows *sql.Rows) ([]Cell, error) {
 	var cells []Cell
 	for rows.Next() {
 		var c Cell
-		if err := rows.Scan(&c.ID, &c.Name, &c.Project, &c.Branch, &c.WorktreePath, &c.Status, &c.Ports, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.Project, &c.Branch, &c.WorktreePath, &c.Status, &c.Ports, &c.Type, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scanning cell: %w", err)
 		}
 		cells = append(cells, c)

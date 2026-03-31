@@ -1,13 +1,16 @@
 package cmd
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/lothardp/hive/internal/config"
+	"github.com/lothardp/hive/internal/shell"
 	"github.com/lothardp/hive/internal/state"
 	"github.com/lothardp/hive/internal/tmux"
 	"github.com/lothardp/hive/internal/worktree"
@@ -97,6 +100,24 @@ var rootCmd = &cobra.Command{
 		app.WtMgr = worktree.NewManager(baseDir)
 		app.TmuxMgr = tmux.NewManager()
 
+		// Verify queen branch integrity (skip if no repo detected or killing a queen)
+		if app.Project != "" {
+			queen, err := app.Repo.GetQueen(ctx, app.Project)
+			if err == nil && queen != nil {
+				// Skip the check for "kill" targeting the queen itself
+				isKillingQueen := cmd.Name() == "kill" && len(args) > 0 && args[0] == queen.Name
+				if !isKillingQueen {
+					currentBranch, err := queenCurrentBranch(ctx, queen.WorktreePath)
+					if err == nil && currentBranch != queen.Branch {
+						return fmt.Errorf(
+							"queen %q is on branch %q but should be on %q — switch it back before using Hive",
+							queen.Name, currentBranch, queen.Branch,
+						)
+					}
+				}
+			}
+		}
+
 		return nil
 	},
 	PersistentPostRunE: func(cmd *cobra.Command, args []string) error {
@@ -113,4 +134,12 @@ func init() {
 
 func Execute() error {
 	return rootCmd.Execute()
+}
+
+func queenCurrentBranch(ctx context.Context, dir string) (string, error) {
+	res, err := shell.RunInDir(ctx, dir, "git", "symbolic-ref", "--short", "HEAD")
+	if err != nil || res.ExitCode != 0 {
+		return "", fmt.Errorf("detecting branch: %w", err)
+	}
+	return strings.TrimSpace(res.Stdout), nil
 }

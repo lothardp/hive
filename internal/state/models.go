@@ -11,6 +11,14 @@ const (
 	StatusError        CellStatus = "error"
 )
 
+type CellType string
+
+const (
+	TypeNormal   CellType = "normal"
+	TypeQueen    CellType = "queen"
+	TypeHeadless CellType = "headless"
+)
+
 type Cell struct {
 	ID           int64
 	Name         string
@@ -19,6 +27,7 @@ type Cell struct {
 	WorktreePath string
 	Status       CellStatus
 	Ports        string
+	Type         CellType
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }

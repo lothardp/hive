@@ -62,5 +62,16 @@ func Open(path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("running migrations: %w", err)
 	}
 
+	runMigrations(db)
+
 	return db, nil
+}
+
+func runMigrations(db *sql.DB) {
+	stmts := []string{
+		`ALTER TABLE cells ADD COLUMN type TEXT NOT NULL DEFAULT 'normal'`,
+	}
+	for _, stmt := range stmts {
+		_, _ = db.Exec(stmt) // ignore "duplicate column" errors
+	}
 }

@@ -15,7 +15,7 @@ func TestRunner_AllPass(t *testing.T) {
 	result := runner.Run(context.Background(), dir, []string{
 		"echo hello",
 		"echo world",
-	})
+	}, nil)
 
 	if result.Ran != 2 {
 		t.Errorf("Ran = %d, want 2", result.Ran)
@@ -45,7 +45,7 @@ func TestRunner_FailAtSecond(t *testing.T) {
 		"echo first",
 		"exit 1",
 		"echo third",
-	})
+	}, nil)
 
 	if result.Ran != 2 {
 		t.Errorf("Ran = %d, want 2", result.Ran)
@@ -65,13 +65,34 @@ func TestRunner_EmptyHooks(t *testing.T) {
 	dir := t.TempDir()
 	runner := NewRunner()
 
-	result := runner.Run(context.Background(), dir, []string{})
+	result := runner.Run(context.Background(), dir, []string{}, nil)
 
 	if result.Ran != 0 {
 		t.Errorf("Ran = %d, want 0", result.Ran)
 	}
 	if result.Failed != nil {
 		t.Errorf("Failed should be nil")
+	}
+}
+
+func TestRunner_EnvVarsPassedToHooks(t *testing.T) {
+	dir := t.TempDir()
+	runner := NewRunner()
+
+	env := map[string]string{
+		"HIVE_QUEEN_DIR": "/home/user/myapp",
+		"HIVE_CELL":      "test-cell",
+	}
+	result := runner.Run(context.Background(), dir, []string{
+		`test "$HIVE_QUEEN_DIR" = "/home/user/myapp"`,
+		`test "$HIVE_CELL" = "test-cell"`,
+	}, env)
+
+	if result.Failed != nil {
+		t.Errorf("expected all hooks to pass with env vars, failed at %d: %v", result.Failed.Index, result.Failed.Err)
+	}
+	if result.Ran != 2 {
+		t.Errorf("Ran = %d, want 2", result.Ran)
 	}
 }
 
@@ -82,7 +103,7 @@ func TestRunner_WorkDirIsUsed(t *testing.T) {
 	// Create a file via hook to prove workdir is set
 	result := runner.Run(context.Background(), dir, []string{
 		"touch marker.txt",
-	})
+	}, nil)
 
 	if result.Failed != nil {
 		t.Fatalf("unexpected failure: %v", result.Failed)

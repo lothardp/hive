@@ -33,14 +33,14 @@ func NewRunner() *Runner {
 	return &Runner{}
 }
 
-func (r *Runner) Run(ctx context.Context, workDir string, hooks []string) *Result {
+func (r *Runner) Run(ctx context.Context, workDir string, hooks []string, env map[string]string) *Result {
 	result := &Result{Total: len(hooks)}
 
 	var lines []string
 	for i, cmd := range hooks {
 		result.Ran = i + 1
 
-		res, err := shell.RunInDir(ctx, workDir, "sh", "-c", cmd)
+		res, err := shell.RunInDirWithEnv(ctx, workDir, env, "sh", "-c", cmd)
 		if err != nil {
 			hookErr := &HookError{Command: cmd, Index: i, Stderr: "", Err: err}
 			result.Failed = hookErr

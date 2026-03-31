@@ -10,6 +10,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/lothardp/hive/internal/state"
 	"github.com/spf13/cobra"
 )
 
@@ -42,8 +43,26 @@ var statusCmd = &cobra.Command{
 
 			age := formatAge(time.Since(c.CreatedAt))
 			portsDisplay := formatPortsColumn(c.Ports)
+
+			nameDisplay := c.Name
+			switch c.Type {
+			case state.TypeQueen:
+				nameDisplay += " [queen]"
+			case state.TypeHeadless:
+				nameDisplay += " [headless]"
+			}
+
+			project := c.Project
+			if project == "" {
+				project = "-"
+			}
+			branch := c.Branch
+			if branch == "" {
+				branch = "-"
+			}
+
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-				c.Name, c.Project, c.Branch, c.Status, tmuxStatus, portsDisplay, age)
+				nameDisplay, project, branch, c.Status, tmuxStatus, portsDisplay, age)
 		}
 
 		w.Flush()
