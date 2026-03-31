@@ -1,0 +1,19 @@
+# Binary
+hive
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+
+# Go
+vendor/
+
+# Hive local state
+.claude/settings.local.json
+
+.claude
