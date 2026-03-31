@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -30,6 +31,7 @@ type App struct {
 	RepoDir    string
 	Project    string
 	Verbose    bool
+	LogFile    *os.File // file logger, closed in PersistentPostRunE
 	WtMgr      *worktree.Manager
 	TmuxMgr    *tmux.Manager
 }
@@ -41,10 +43,6 @@ var rootCmd = &cobra.Command{
 	Short: "Spawn isolated, parallel development environments",
 	Long:  "Hive is a CLI tool for managing isolated dev environments using Git Worktrees, Docker Compose, and Caddy reverse proxy.",
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-		if app.Verbose {
-			slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})))
-		}
-
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return fmt.Errorf("getting home directory: %w", err)
@@ -53,6 +51,22 @@ var rootCmd = &cobra.Command{
 		if err := os.MkdirAll(app.HiveDir, 0o755); err != nil {
 			return fmt.Errorf("creating hive directory: %w", err)
 		}
+
+		// Set up file logging — always writes to ~/.hive/hive.log
+		logPath := filepath.Join(app.HiveDir, "hive.log")
+		logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if err != nil {
+			return fmt.Errorf("opening log file: %w", err)
+		}
+		app.LogFile = logFile
+
+		var logWriter io.Writer = logFile
+		logLevel := slog.LevelInfo
+		if app.Verbose {
+			logWriter = io.MultiWriter(logFile, os.Stderr)
+			logLevel = slog.LevelDebug
+		}
+		slog.SetDefault(slog.New(slog.NewTextHandler(logWriter, &slog.HandlerOptions{Level: logLevel})))
 
 		dbPath := filepath.Join(app.HiveDir, "state.db")
 		db, err := state.Open(dbPath)
@@ -132,6 +146,9 @@ var rootCmd = &cobra.Command{
 		return nil
 	},
 	PersistentPostRunE: func(cmd *cobra.Command, args []string) error {
+		if app.LogFile != nil {
+			app.LogFile.Close()
+		}
 		if app.DB != nil {
 			return app.DB.Close()
 		}

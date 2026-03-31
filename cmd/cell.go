@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -89,6 +90,8 @@ var cellCmd = &cobra.Command{
 		if branch == "" {
 			branch = rawName
 		}
+
+		slog.Info("creating cell", "name", name, "branch", branch, "project", app.Project)
 
 		// Create worktree
 		wtPath, err := app.WtMgr.Create(ctx, app.RepoDir, app.Project, name, branch)
@@ -180,6 +183,8 @@ var cellCmd = &cobra.Command{
 				layoutSummary = "applied"
 			}
 		}
+
+		slog.Info("cell created", "name", name, "branch", branch, "worktree", wtPath)
 
 		fmt.Printf("Cell %q created\n", name)
 		fmt.Printf("  Branch:   %s\n", branch)

@@ -3,6 +3,7 @@ package cmd
 import (
 	"bufio"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 
@@ -41,6 +42,8 @@ var killCmd = &cobra.Command{
 			}
 			name = args[0]
 		}
+
+		slog.Info("kill requested", "cell", name)
 
 		cell, err := app.Repo.GetByName(ctx, name)
 		if err != nil {
@@ -99,16 +102,19 @@ var killCmd = &cobra.Command{
 
 		// Kill tmux session
 		if err := app.TmuxMgr.KillSession(ctx, name); err != nil {
+			slog.Warn("failed to kill tmux session", "cell", name, "error", err)
 			fmt.Fprintf(cmd.ErrOrStderr(), "warning: failed to kill tmux session: %v\n", err)
 		}
 
-		// Remove worktree
+		// Remove worktree (non-fatal — cell may be orphaned)
 		if err := app.WtMgr.Remove(ctx, app.RepoDir, cell.WorktreePath); err != nil {
-			return fmt.Errorf("removing worktree: %w", err)
+			slog.Warn("failed to remove worktree, continuing with cleanup", "cell", name, "path", cell.WorktreePath, "error", err)
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: failed to remove worktree: %v\n", err)
 		}
 
 		// Delete branch (best-effort — skip if it's the current branch or default branch)
 		if err := app.WtMgr.DeleteBranch(ctx, app.RepoDir, cell.Branch); err != nil {
+			slog.Warn("failed to delete branch", "cell", name, "branch", cell.Branch, "error", err)
 			fmt.Fprintf(cmd.ErrOrStderr(), "warning: failed to delete branch %q: %v\n", cell.Branch, err)
 		}
 
