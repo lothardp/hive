@@ -29,7 +29,32 @@ var cellCmd = &cobra.Command{
 	Args:  cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
-		name := args[0]
+		rawName := args[0]
+
+		// Headless path — no worktree, no git repo required, no prefix
+		if cellHeadless {
+			if cellBranch != "" {
+				return fmt.Errorf("--headless and --branch cannot be used together")
+			}
+			return createHeadlessCell(ctx, cmd, rawName, args)
+		}
+
+		// Normal cell path — requires git repo
+		if len(args) > 1 {
+			return fmt.Errorf("unexpected argument %q — did you mean --headless?", args[1])
+		}
+
+		if app.RepoDir == "" {
+			return fmt.Errorf("not in a git repository — run this from inside a project")
+		}
+
+		// Auto-create queen session if needed (must happen before cellName
+		// so project is resolved, but queen creates its own name internally)
+		if err := createQueen(ctx, cmd); err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: failed to create queen session: %v\n", err)
+		}
+
+		name := cellName(rawName)
 
 		// Check if cell already exists
 		existing, err := app.Repo.GetByName(ctx, name)
@@ -40,31 +65,9 @@ var cellCmd = &cobra.Command{
 			return fmt.Errorf("cell %q already exists (status: %s)", name, existing.Status)
 		}
 
-		// Headless path — no worktree, no git repo required
-		if cellHeadless {
-			if cellBranch != "" {
-				return fmt.Errorf("--headless and --branch cannot be used together")
-			}
-			return createHeadlessCell(ctx, cmd, name, args)
-		}
-
-		// Normal cell path — requires git repo
-		if !cellHeadless && len(args) > 1 {
-			return fmt.Errorf("unexpected argument %q — did you mean --headless?", args[1])
-		}
-
-		if app.RepoDir == "" {
-			return fmt.Errorf("not in a git repository — run this from inside a project")
-		}
-
-		// Auto-create queen session if needed
-		if err := createQueen(ctx, cmd); err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "warning: failed to create queen session: %v\n", err)
-		}
-
 		branch := cellBranch
 		if branch == "" {
-			branch = name
+			branch = rawName
 		}
 
 		// Create worktree
@@ -175,7 +178,7 @@ var cellCmd = &cobra.Command{
 }
 
 func createQueen(ctx context.Context, cmd *cobra.Command) error {
-	queenName := app.Project + "-queen"
+	queenName := cellName("queen")
 
 	// Already exists?
 	existing, err := app.Repo.GetQueen(ctx, app.Project)
@@ -229,7 +232,18 @@ func createQueen(ctx context.Context, cmd *cobra.Command) error {
 	return nil
 }
 
-func createHeadlessCell(ctx context.Context, cmd *cobra.Command, name string, args []string) error {
+func createHeadlessCell(ctx context.Context, cmd *cobra.Command, rawName string, args []string) error {
+	name := rawName // headless cells are never prefixed
+
+	// Check if cell already exists
+	existing, err := app.Repo.GetByName(cmd.Context(), name)
+	if err != nil {
+		return fmt.Errorf("checking existing cell: %w", err)
+	}
+	if existing != nil {
+		return fmt.Errorf("cell %q already exists (status: %s)", name, existing.Status)
+	}
+
 	// Resolve working directory — optional second positional arg
 	dir := "."
 	if len(args) > 1 {
@@ -281,6 +295,21 @@ func createHeadlessCell(ctx context.Context, cmd *cobra.Command, name string, ar
 	fmt.Printf("  Dir:   %s\n", absDir)
 	fmt.Printf("  Tmux:  %s\n", name)
 	return nil
+}
+
+// cellName returns the prefixed cell name: <prefix>-<name>.
+// Prefix resolution: config.CellPrefix > project name > "" (no prefix for headless outside a repo).
+func cellName(name string) string {
+	prefix := ""
+	if app.Config != nil && app.Config.CellPrefix != "" {
+		prefix = app.Config.CellPrefix
+	} else if app.Project != "" {
+		prefix = app.Project
+	}
+	if prefix == "" {
+		return name
+	}
+	return prefix + "-" + name
 }
 
 // resolveLayout returns the "default" layout, checking repo config first then global config.

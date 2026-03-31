@@ -17,6 +17,7 @@ type ProjectConfig struct {
 	Hooks       []string          `yaml:"hooks" json:"hooks"`
 	Layouts     map[string]Layout `yaml:"layouts" json:"layouts"`
 	PortVars    []string          `yaml:"port_vars" json:"port_vars"`
+	CellPrefix  string            `yaml:"cell_prefix" json:"cell_prefix"`
 }
 
 type Layout struct {
