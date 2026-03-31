@@ -21,3 +21,7 @@ Before registering, scan the repo for things that break in isolated worktrees:
 - Large directories that should be shared, not copied (`node_modules/`, `vendor/`, `.build/`)
 
 Print warnings with suggested fixes (e.g., "consider adding a seed script to copy .env.local").
+
+## Future — Global Setup Hooks
+
+Global hooks that run for every cell regardless of repo (e.g., always set up a shared tool, always copy a global .gitconfig). Same ordered shell command strings as repo hooks, but stored at the global level. Repo hooks run after global hooks.
