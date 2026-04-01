@@ -15,7 +15,7 @@ Hive creates **cells** — isolated dev environments that combine:
 - **Setup hooks** (auto-run scripts on cell creation)
 
 ```
-~/.hive/cells/myproject/
+~/hive/cells/myproject/
 ├── feat-auth/       # cell: feat-auth (branch: feat-auth)
 ├── fix-api-bug/     # cell: fix-api-bug (branch: fix-api-bug)
 └── refactor-db/     # cell: refactor-db (branch: refactor-db)
