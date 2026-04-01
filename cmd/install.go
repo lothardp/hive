@@ -62,7 +62,7 @@ var installCmd = &cobra.Command{
 		home, _ := os.UserHomeDir()
 
 		// Prompt for cells directory (where worktrees are created)
-		defaultCellsDir := filepath.Join(home, ".hive", "cells")
+		defaultCellsDir := filepath.Join(home, "hive", "cells")
 		existingCellsDir, _ := app.ConfigRepo.Get(ctx, "cells_dir")
 		if existingCellsDir != "" {
 			defaultCellsDir = existingCellsDir
