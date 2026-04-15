@@ -203,9 +203,14 @@ func (m CellsModel) updateNormal(msg tea.KeyMsg) (CellsModel, tea.Cmd) {
 		return m, nil
 
 	case key.Matches(msg, cellKeys.Kill):
-		if r := m.selectedRow(); r != nil && r.cell != nil {
-			m.confirming = true
-			m.confirmName = r.cell.Name
+		if r := m.selectedRow(); r != nil {
+			if r.cell != nil {
+				m.confirming = true
+				m.confirmName = r.cell.Name
+			} else if r.tmuxSession != "" {
+				m.confirming = true
+				m.confirmName = r.tmuxSession
+			}
 		}
 		return m, nil
 
@@ -231,8 +236,11 @@ func (m CellsModel) updateConfirming(msg tea.KeyMsg) (CellsModel, tea.Cmd) {
 		name := m.confirmName
 		return m, func() tea.Msg {
 			ctx := context.Background()
+			// Try killing as a managed cell first; if not found, kill the raw tmux session.
 			if err := m.cellService.Kill(ctx, name); err != nil {
-				return killFailed{name, err}
+				if killErr := m.tmuxMgr.KillSession(ctx, name); killErr != nil {
+					return killFailed{name, killErr}
+				}
 			}
 			return cellKilled{name}
 		}
