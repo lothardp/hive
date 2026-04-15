@@ -1,29 +1,29 @@
 # Hive
 
-A CLI tool for spawning isolated, parallel development environments using Git Worktrees and tmux.
+A TUI-first tool for spawning isolated, parallel development environments using Git clones and tmux.
 
-Hive lets you work on multiple feature branches simultaneously — each in its own worktree, with its own tmux session, completely isolated from each other. It's built for developers who juggle many tasks at once, and for AI agents (like Claude Code) that need contained environments where they can't interfere with other work.
+Hive lets you work on multiple copies of a repo simultaneously — each in its own full clone, with its own tmux session, completely isolated from each other. The dashboard is your home base: create cells, navigate between them, kill them when you're done.
 
 ## How It Works
 
 Hive creates **cells** — isolated dev environments that combine:
 
-- A **Git Worktree** (separate filesystem per branch, no conflicts)
+- A **Git clone** (full independent copy of the repo)
 - A **tmux session** (dedicated terminal, easy to switch between)
-- **State tracking** in SQLite (know what's running, where, and on which branch)
+- **State tracking** in SQLite (know what's running and where)
 - **Port allocation** (unique ports per cell, no conflicts)
 - **Setup hooks** (auto-run scripts on cell creation)
 
 ```
-~/hive/cells/myproject/
-├── feat-auth/       # cell: feat-auth (branch: feat-auth)
-├── fix-api-bug/     # cell: fix-api-bug (branch: fix-api-bug)
-└── refactor-db/     # cell: refactor-db (branch: refactor-db)
+~/hive/cells/
+├── myapp/
+│   ├── work/            # clone of myapp
+│   └── experiments/     # another clone of myapp
+├── api/
+│   └── refactor/        # clone of api
 ```
 
-Each cell is fully independent. No shared `node_modules`, no port conflicts, no stepping on each other's toes.
-
-Hive also supports **queen sessions** (a read-only environment on your default branch, auto-created with your first cell) and **headless cells** (quick tmux sessions in any directory, no git worktree needed).
+Each cell is fully independent. No shared `node_modules`, no port conflicts, no stepping on each other's toes. You manage branches inside each clone however you want — Hive doesn't care about git branches.
 
 ## Installation
 
@@ -32,7 +32,6 @@ Hive also supports **queen sessions** (a read-only environment on your default b
 - Go 1.24+
 - Git
 - tmux
-- fzf (for interactive cell switching)
 
 ### Build from Source
 
@@ -53,117 +52,70 @@ mv hive /usr/local/bin/
 ### First-Time Setup
 
 ```bash
-hive install                  # Configure cells directory, projects directory, tmux integration
+hive install    # Configure project directories, cells directory, tmux integration
 ```
 
-### Register a Repo
+This creates `~/.hive/config.yaml` and generates tmux keybindings. Follow the instructions to source `~/.hive/tmux.conf` in your `~/.tmux.conf`.
 
-From inside a git repo:
+### Launch the Dashboard
 
 ```bash
-hive setup                    # Interactive: project name, remote, default branch, config
+hive start      # Creates the dashboard tmux session and attaches to it
 ```
 
-## Usage
+That's it. Everything else happens inside the dashboard.
 
-### Create a Cell
+## The Dashboard
 
-From inside a registered (or any git) repo:
+The dashboard is a Bubble Tea TUI with three tabs:
 
-```bash
-hive cell my-feature          # Creates myapp-my-feature (worktree + tmux)
-hive cell bugfix -b main      # Creates myapp-bugfix from existing branch
-hive cell scratch --headless  # Tmux session in current dir (no prefix, no worktree)
-hive cell notes --headless ~/notes  # Tmux session in a specific directory
-```
+### Cells Tab
 
-On your first cell for a project, Hive automatically creates a **queen session** — a protected environment on the default branch.
+Shows all active cells grouped by project. Navigate with `j`/`k`, press Enter to switch to a cell's tmux session, `c` to create a new cell, `x` to kill one.
 
-Cell names are automatically prefixed with the project name (e.g., `my-feature` becomes `myapp-my-feature`). Headless cells are never prefixed. You can override the prefix with `cell_prefix` in your config.
-
-### Navigate Cells
-
-```bash
-hive join myapp-my-feature    # Attach to cell's tmux session
-hive switch                   # Interactive fzf picker
-hive status                   # List all cells
-```
-
-```
-NAME                    PROJECT    BRANCH         STATUS    TMUX    PORTS      AGE
-myapp-queen [queen]     myapp      main           stopped   alive   -          2h
-myapp-my-feature        myapp      my-feature     stopped   alive   3001,5433  2h
-myapp-bugfix            myapp      main           stopped   alive   3002,5434  15m
-scratch [headless]      -          -              stopped   alive   -          5m
-```
-
-### Dashboard
-
-```bash
-hive dashboard                # Interactive TUI overview of all cells
-```
-
-A tree-view TUI (built with Bubble Tea) showing cells grouped under projects. Queen cells are highlighted with a crown icon, headless cells are dimmed. Also shows non-Hive tmux sessions in a separate group.
+From any cell, press `<prefix> h` to switch back to the dashboard.
 
 | Key | Action |
 |-----|--------|
 | `j`/`k` or `↑`/`↓` | Navigate |
 | `Enter` | Switch to cell |
+| `c` | Create new cell (project picker → name → clone) |
+| `h` | Create headless cell (tmux session only, no clone) |
 | `x` | Kill cell (with confirmation) |
 | `n` | Mark notifications read |
-| `c` | Create cell prompt |
 | `r` | Refresh |
-| `q` | Quit |
+| `Tab` | Switch tab |
+| `q` | Quit dashboard |
 
-### Notifications
+### Projects Tab
 
-Agents (or scripts) running inside cells can send notifications:
+Lists all discovered projects (git repos found in your `project_dirs`). Press Enter to edit a project's config in your editor.
 
-```bash
-hive notify myapp-my-feature -m "Build complete" -t "CI"
-hive notifications                # List all
-hive notifications --unread       # Unread only
-hive notifications 42             # View details for notification #42
-```
+### Config Tab
 
-Unread counts appear in `hive status` and the TUI dashboard.
-
-### Tmux Keybindings
-
-```bash
-hive keybindings              # Regenerate and reload tmux keybindings
-hive keybindings --direct     # Bind directly to <prefix> <key> instead of key table
-```
-
-By default, Hive uses a tmux key table: `<prefix> h` enters the Hive table, then `s`/`c`/`k`/`d` for switch/create/kill/dashboard. With `--direct`, bindings go straight to `<prefix> s`, etc.
-
-### Clean Up
-
-```bash
-hive kill myapp-my-feature    # Removes worktree, branch, tmux session, and DB record
-```
-
-Queen sessions can't be killed while other cells exist for the project — kill the regular cells first.
+Shows the global config. Press `e` to edit it in your editor.
 
 ## Configuration
 
-Register your repo with `hive setup` for interactive configuration, or manage config with `hive config`:
-
-```bash
-hive config show              # Show effective config (DB or .hive.yaml)
-hive config export -f cfg.yaml  # Export to file
-hive config import -f cfg.yaml  # Import from file
-hive config apply -f patch.yaml # Merge partial config into existing
-hive config apply -f layouts.yaml --global  # Apply layouts globally
-```
-
-Config can live in the database (via `hive setup`) or in a `.hive.yaml` file in your project root. DB config takes precedence.
+### Global Config (`~/.hive/config.yaml`)
 
 ```yaml
-compose_path: docker-compose.yml
-expose_port: 3000
-cell_prefix: myapp              # Override default project-name prefix (optional)
-seed_scripts:
+project_dirs:
+  - ~/side_projects
+  - ~/work
+  - ~/repos
+cells_dir: ~/hive/cells
+editor: vim
+tmux_leader: "C-a"
+```
+
+Hive scans `project_dirs` one level deep for git repos — that's how it discovers your projects. No registration step needed.
+
+### Per-Project Config (`~/.hive/config/{project}.yml`)
+
+```yaml
+repo_path: ~/side_projects/my-api
+hooks:
   - npm install
   - npm run db:migrate
 env:
@@ -171,9 +123,6 @@ env:
 port_vars:
   - PORT
   - DB_PORT
-hooks:
-  - cp ../.env .env
-  - npm install
 layouts:
   default:
     windows:
@@ -187,40 +136,38 @@ layouts:
             split: horizontal
 ```
 
+Per-project configs are personal — they live in `~/.hive/config/`, not in the repo. Each developer customizes their own hooks and layouts.
+
 ### Port Allocation
 
-List the env var names you need in `port_vars`. Hive assigns unique ports (3001-9999) per cell and injects them as environment variables into the tmux session. No two cells will share a port.
+List env var names in `port_vars`. Hive assigns unique ports (3001-9999) per cell and injects them as environment variables. No two cells share a port.
 
 ### Setup Hooks
 
-Commands listed in `hooks` run sequentially in the cell's worktree on creation. They receive the full cell environment (ports, static env, `HIVE_CELL`, `HIVE_QUEEN_DIR`). Execution aborts on the first failure.
+Commands in `hooks` run sequentially in the clone directory after creation. They receive the cell's environment (ports, static env, `HIVE_CELL`). Execution aborts on first failure.
 
 ### Layouts
 
-Define tmux window/pane layouts in `layouts`. A layout named `"default"` is auto-applied when creating a cell. Layouts can be set per-repo or globally with `hive config apply --global`.
+Define tmux window/pane layouts under `layouts`. A layout named `"default"` is auto-applied on cell creation.
 
-## Shell Completion
+## Notifications
 
-Hive supports tab completion for commands, flags, and cell names:
+Scripts or agents inside cells can send notifications:
 
 ```bash
-# Zsh (add to ~/.zshrc)
-source <(hive completion zsh)
-
-# Bash (add to ~/.bashrc)
-source <(hive completion bash)
-
-# Fish
-hive completion fish | source
+hive notify "Build complete" -t "CI"
 ```
 
-After setup, `hive kill <TAB>` will show all cell names.
+Unread counts appear in the dashboard next to each cell.
 
-## Roadmap
+## CLI Reference
 
-- **Background tasks** — periodic git fetch and other cron-style operations
-- **Service management** (`hive up/down/stop`) — start/stop project services per cell
-- **Reverse proxy** — `<cell>.dev.local` URL routing via Caddy
+```
+hive install               # One-time machine setup
+hive start                 # Launch/attach to dashboard
+hive notify <msg>          # Send notification from inside a cell
+hive logs [-f]             # Tail the log file
+```
 
 ## License
 

@@ -39,12 +39,11 @@ func TestAllocateAvoidsUsedPorts(t *testing.T) {
 
 	// Create a cell with some ports already allocated
 	cell := &state.Cell{
-		Name:         "existing",
-		Project:      "p",
-		Branch:       "b",
-		WorktreePath: "/tmp/existing",
-		Status:       state.StatusRunning,
-		Ports:        `{"PORT":3001,"DB_PORT":3002}`,
+		Name:      "existing",
+		Project:   "p",
+		ClonePath: "/tmp/existing",
+		Status:    state.StatusRunning,
+		Ports:     `{"PORT":3001,"DB_PORT":3002}`,
 	}
 	if err := repo.Create(ctx, cell); err != nil {
 		t.Fatalf("creating cell: %v", err)

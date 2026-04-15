@@ -19,12 +19,11 @@ func createTestCell(t *testing.T, cellRepo *CellRepository, name string) {
 	t.Helper()
 	ctx := context.Background()
 	cell := &Cell{
-		Name:         name,
-		Project:      "testproj",
-		Branch:       "main",
-		WorktreePath: "/tmp/" + name,
-		Status:       StatusRunning,
-		Ports:        "{}",
+		Name:      name,
+		Project:   "testproj",
+		ClonePath: "/tmp/" + name,
+		Status:    StatusRunning,
+		Ports:     "{}",
 	}
 	if err := cellRepo.Create(ctx, cell); err != nil {
 		t.Fatalf("creating test cell %s: %v", name, err)

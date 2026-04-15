@@ -1,39 +1,30 @@
 package cmd
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 
+	"github.com/lothardp/hive/internal/clone"
 	"github.com/lothardp/hive/internal/config"
-	"github.com/lothardp/hive/internal/shell"
 	"github.com/lothardp/hive/internal/state"
 	"github.com/lothardp/hive/internal/tmux"
-	"github.com/lothardp/hive/internal/worktree"
 	"github.com/spf13/cobra"
-	"golang.org/x/term"
 )
 
 type App struct {
-	DB         *sql.DB
-	Repo       *state.CellRepository
-	ConfigRepo *state.ConfigRepository
-	RepoRepo   *state.RepoRepository
-	NotifRepo  *state.NotificationRepository
-	Config     *config.ProjectConfig
-	RepoRecord *state.Repo // registered repo for current dir, or nil
-	HiveDir    string
-	RepoDir    string
-	Project    string
-	Verbose    bool
-	LogFile    *os.File // file logger, closed in PersistentPostRunE
-	WtMgr      *worktree.Manager
-	TmuxMgr    *tmux.Manager
+	DB        *sql.DB
+	CellRepo  *state.CellRepository
+	NotifRepo *state.NotificationRepository
+	Config    *config.GlobalConfig
+	HiveDir   string
+	Verbose   bool
+	LogFile   *os.File
+	CloneMgr  *clone.Manager
+	TmuxMgr   *tmux.Manager
 }
 
 var app App
@@ -41,7 +32,7 @@ var app App
 var rootCmd = &cobra.Command{
 	Use:   "hive",
 	Short: "Spawn isolated, parallel development environments",
-	Long:  "Hive is a CLI tool for managing isolated dev environments using Git Worktrees, Docker Compose, and Caddy reverse proxy.",
+	Long:  "Hive is a CLI tool for managing isolated dev environments using Git clones and tmux.",
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -52,7 +43,7 @@ var rootCmd = &cobra.Command{
 			return fmt.Errorf("creating hive directory: %w", err)
 		}
 
-		// Set up file logging — always writes to ~/.hive/hive.log
+		// Set up file logging
 		logPath := filepath.Join(app.HiveDir, "hive.log")
 		logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 		if err != nil {
@@ -68,80 +59,23 @@ var rootCmd = &cobra.Command{
 		}
 		slog.SetDefault(slog.New(slog.NewTextHandler(logWriter, &slog.HandlerOptions{Level: logLevel})))
 
+		// Open state DB
 		dbPath := filepath.Join(app.HiveDir, "state.db")
 		db, err := state.Open(dbPath)
 		if err != nil {
 			return fmt.Errorf("opening state database: %w", err)
 		}
 		app.DB = db
-		app.Repo = state.NewCellRepository(db)
-		app.ConfigRepo = state.NewConfigRepository(db)
-		app.RepoRepo = state.NewRepoRepository(db)
+		app.CellRepo = state.NewCellRepository(db)
 		app.NotifRepo = state.NewNotificationRepository(db)
 
-		// Detect git repo — not required for all commands
-		ctx := cmd.Context()
-		repoDir, err := worktree.DetectRepoRoot(ctx)
-		if err == nil {
-			// If inside a child cell, use the queen's dir for repo/config lookup
-			// so that DB-first config resolves to the registered repo path.
-			// TODO: For worktrees accessed outside of Hive tmux sessions (where
-			// HIVE_QUEEN_DIR is not set), consider using git rev-parse
-			// --git-common-dir to resolve back to the main repo root.
-			if queenDir := os.Getenv("HIVE_QUEEN_DIR"); queenDir != "" {
-				repoDir = queenDir
-			}
-			app.RepoDir = repoDir
+		// Load global config
+		app.Config = config.LoadGlobalOrDefault(app.HiveDir)
 
-			project, err := worktree.DetectProject(ctx, repoDir)
-			if err == nil {
-				app.Project = project
-			}
-
-			// DB-first config: look up registered repo, fall back to .hive.yaml
-			repoRecord, err := app.RepoRepo.GetByPath(ctx, repoDir)
-			if err == nil && repoRecord != nil {
-				app.RepoRecord = repoRecord
-				cfg, err := config.ProjectConfigFromJSON(repoRecord.Config)
-				if err == nil {
-					app.Config = cfg
-				} else {
-					slog.Warn("failed to parse repo config from DB, using defaults", "error", err)
-					app.Config = config.LoadOrDefault(repoDir)
-				}
-			} else {
-				app.Config = config.LoadOrDefault(repoDir)
-			}
-		}
-
-		// Set up worktree manager — use cells_dir from DB if set
-		baseDir, err := worktree.DefaultBaseDir()
-		if err != nil {
-			return fmt.Errorf("getting cells base dir: %w", err)
-		}
-		if cellsDir, err := app.ConfigRepo.Get(ctx, "cells_dir"); err == nil && cellsDir != "" {
-			baseDir = cellsDir
-		}
-		app.WtMgr = worktree.NewManager(baseDir)
+		// Init managers
+		cellsDir := app.Config.ResolveCellsDir()
+		app.CloneMgr = clone.NewManager(cellsDir)
 		app.TmuxMgr = tmux.NewManager()
-
-		// Verify queen branch integrity (skip if no repo detected or killing a queen)
-		if app.Project != "" {
-			queen, err := app.Repo.GetQueen(ctx, app.Project)
-			if err == nil && queen != nil {
-				// Skip the check for "kill" targeting the queen itself
-				isKillingQueen := cmd.Name() == "kill" && len(args) > 0 && args[0] == queen.Name
-				if !isKillingQueen {
-					currentBranch, err := queenCurrentBranch(ctx, queen.WorktreePath)
-					if err == nil && currentBranch != queen.Branch {
-						return fmt.Errorf(
-							"queen %q is on branch %q but should be on %q — switch it back before using Hive",
-							queen.Name, currentBranch, queen.Branch,
-						)
-					}
-				}
-			}
-		}
 
 		return nil
 	},
@@ -162,27 +96,4 @@ func init() {
 
 func Execute() error {
 	return rootCmd.Execute()
-}
-
-// waitForKeypress puts the terminal in raw mode and waits for a single keypress.
-func waitForKeypress() {
-	fmt.Println("\nPress any key to close")
-	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
-	if err != nil {
-		// Fallback: just wait for Enter
-		buf := make([]byte, 1)
-		_, _ = os.Stdin.Read(buf)
-		return
-	}
-	defer term.Restore(int(os.Stdin.Fd()), oldState)
-	buf := make([]byte, 1)
-	_, _ = os.Stdin.Read(buf)
-}
-
-func queenCurrentBranch(ctx context.Context, dir string) (string, error) {
-	res, err := shell.RunInDir(ctx, dir, "git", "symbolic-ref", "--short", "HEAD")
-	if err != nil || res.ExitCode != 0 {
-		return "", fmt.Errorf("detecting branch: %w", err)
-	}
-	return strings.TrimSpace(res.Stdout), nil
 }

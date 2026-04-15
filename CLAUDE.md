@@ -1,124 +1,146 @@
 # Hive
 
-Hive is a CLI tool for spawning isolated, parallel development environments ("cells") using Git Worktrees and tmux. It's designed to let developers (and AI agents like Claude Code) work on multiple feature branches simultaneously without conflicts.
+Hive is a TUI-first CLI tool for spawning isolated, parallel development environments ("cells") using Git clones and tmux. The dashboard is the primary interface — the CLI exists only to launch it.
 
 ## Quick Reference
 
 ```
-hive install                   # One-time machine setup (DB, tmux, directories)
-hive setup                     # Register current repo with Hive (interactive)
-hive cell <name> [-b branch]   # Create a new cell (worktree + tmux session)
-hive cell <name> --headless [dir]  # Create a headless cell (tmux only, no worktree)
-hive join <name>               # Attach to a cell's tmux session
-hive switch                    # fzf picker to switch between cells
-hive status                    # List all cells with status
-hive kill <name>               # Destroy cell (worktree + tmux + DB record)
-hive dashboard                 # Interactive TUI overview (Bubble Tea)
-hive config show               # Show effective config for current repo
-hive config export [-f file]   # Export repo config to YAML
-hive config import [-f file]   # Import repo config from YAML
-hive config apply [-f file] [--global]  # Merge YAML into repo or global config
-hive keybindings [--direct]    # Regenerate tmux keybindings
-hive notify <cell> -m <msg>    # Send a notification to a cell
-hive notifications             # List recent notifications
-hive logs                      # Tail the Hive log file
+hive install               # One-time machine setup (config, dirs, tmux.conf)
+hive start                 # Launch the dashboard (or attach if already running)
+hive notify <msg>          # Send a notification from inside a cell
+hive logs [-f]             # Tail the Hive log file
 ```
+
+Everything else (create cells, kill cells, navigate, configure projects) happens inside the dashboard TUI.
 
 ## Architecture
 
 ### Core Concepts
 
-- **Cell**: An isolated dev environment = git worktree + tmux session + DB record. Each cell gets its own filesystem, branch, and terminal session. Three types: `normal`, `queen`, `headless`.
-- **Queen Session**: Auto-created on first `hive cell` for a project. Uses the repo's original directory (not a worktree) on the default branch. Protected: cannot be killed while other cells exist for the project. Branch integrity is verified on every Hive command.
-- **Headless Cell**: A tmux session in an arbitrary directory, no git worktree attached. Created with `hive cell <name> --headless [dir]`.
-- **Cell Naming**: All cell names are auto-prefixed with the project name (e.g., `hive cell foo` in project `myapp` → cell `myapp-foo`). Override with `cell_prefix` in config. Headless cells are never prefixed.
+- **Dashboard**: The single "queen" — a dedicated tmux session (`hive`) running the TUI, rooted in `~`. Always the first session created, always accessible via `<leader>+h` from any cell.
+- **Cell**: An isolated dev environment = git clone + tmux session + DB record. Two types: `normal` (has a clone) and `headless` (tmux session only, no clone).
+- **Cell Naming**: Normal cells are prefixed with the project name: `<project>-<name>` (e.g., `myapp-work`). Headless cells use the bare name.
+- **Project Discovery**: Hive scans directories listed in `config.yaml` → `project_dirs` one level deep for git repos. No registration step needed.
 
 ### Tech Stack
 
 - **Go** (module: `github.com/lothardp/hive`)
 - **CLI**: `spf13/cobra`
 - **State**: SQLite via `modernc.org/sqlite` (pure Go, no CGO)
-- **Config**: `.hive.yaml` per repo, parsed with `gopkg.in/yaml.v3`
+- **Config**: `~/.hive/config.yaml` (global) + `~/.hive/config/{project}.yml` (per-project), parsed with `gopkg.in/yaml.v3`
 - **Logging**: `log/slog` (stdlib)
 - **TUI**: `charmbracelet/bubbletea`, `charmbracelet/lipgloss`, `charmbracelet/bubbles`
-- **External tools**: `git`, `tmux`, `fzf` (for switch), `docker compose` (future)
-- All external tools are called via `os/exec`, no SDKs
+- **External tools**: `git`, `tmux`
+- All external tools called via `os/exec`, no SDKs
 
 ### Project Layout
 
 ```
 hive/
 ├── main.go                        # Entry point, calls cmd.Execute()
-├── cmd/                           # Cobra commands, one file per command
+├── cmd/                           # Cobra commands
 │   ├── root.go                    # App struct, PersistentPreRunE for DB/config init
-│   ├── cell.go                    # hive cell — create worktree + tmux + DB (+ queen + headless)
-│   ├── completion.go              # Shell completion helpers (cell name completion)
+│   ├── start.go                   # hive start — launch/attach to dashboard tmux session
 │   ├── install.go                 # hive install — one-time machine bootstrap
-│   ├── setup.go                   # hive setup — interactive repo registration
-│   ├── config.go                  # hive config — show/export/import/apply subcommands
-│   ├── join.go                    # hive join — attach tmux session
-│   ├── switch.go                  # hive switch — fzf-based cell picker
-│   ├── status.go                  # hive status — table of all cells
-│   ├── kill.go                    # hive kill — full teardown (+ queen/headless paths)
-│   ├── dashboard.go               # hive dashboard — Bubble Tea TUI
-│   ├── keybindings.go             # hive keybindings — regenerate tmux keybindings
-│   ├── notify.go                  # hive notify — send notifications to cells
-│   ├── notifications.go           # hive notifications — list/view notifications
-│   ├── logs.go                    # hive logs — tail ~/.hive/hive.log
-│   └── [up, down, stop, etc.]     # Stubs for future phases
+│   ├── dashboard.go               # hive dashboard — run the Bubble Tea TUI
+│   ├── notify.go                  # hive notify — send notification from inside a cell
+│   └── logs.go                    # hive logs — tail ~/.hive/hive.log
 ├── internal/
-│   ├── config/
-│   │   ├── config.go              # .hive.yaml loader, ProjectConfig, JSON/YAML serialization
-│   │   └── merge.go               # Config merge (upsert semantics for apply)
+│   ├── cell/service.go            # Cell lifecycle: Create, Kill, CreateHeadless, List
+│   ├── clone/clone.go             # Git clone create/remove (replaces worktree)
+│   ├── config/config.go           # GlobalConfig + ProjectConfig loaders, project discovery
 │   ├── envars/envars.go           # Build env var map from ports + static env
 │   ├── hooks/hooks.go             # Setup hook runner (abort-on-first-failure)
+│   ├── keybindings/keybindings.go # Tmux keybinding generator (dashboard switch)
 │   ├── layout/layout.go           # Tmux layout applier (windows + panes)
 │   ├── ports/ports.go             # Port allocator (range 3001-9999, checks OS + DB)
 │   ├── state/
 │   │   ├── db.go                  # SQLite Open(), schema, migrations
-│   │   ├── models.go              # Cell, Repo structs; CellStatus, CellType enums
-│   │   ├── repo.go                # CellRepository CRUD (+ GetQueen, CountByProject, UpdatePorts)
-│   │   ├── config_repo.go         # ConfigRepository — global_config key/value store
-│   │   └── repo_repo.go           # RepoRepository — registered repos CRUD
-│   ├── keybindings/keybindings.go  # Tmux keybinding generator (table or direct mode)
-│   ├── notify/notify.go           # Notification sender (stub for future)
-│   ├── tui/dashboard.go           # Bubble Tea dashboard model (tree view, actions)
-│   ├── worktree/worktree.go       # Git worktree create/remove/branch delete, project detection
-│   ├── tmux/tmux.go               # Tmux session create/attach/kill/list (env vars via -e flags)
-│   └── shell/exec.go              # os/exec helpers: Run(), RunInDir(), RunInDirWithEnv()
+│   │   ├── models.go              # Cell, Notification structs; CellStatus, CellType enums
+│   │   ├── repo.go                # CellRepository CRUD
+│   │   └── notification_repo.go   # NotificationRepository CRUD
+│   ├── tmux/tmux.go               # Tmux session create/attach/kill/list
+│   ├── shell/exec.go              # os/exec helpers: Run(), RunInDir(), RunInDirWithEnv()
+│   └── tui/                       # Bubble Tea TUI (multi-tab dashboard)
+│       ├── dashboard.go           # Root model: tab switching, global keybinds, overlays
+│       ├── cells.go               # Cells tab: list, navigate, kill
+│       ├── projects.go            # Projects tab: list, edit per-project config
+│       ├── configtab.go           # Config tab: show/edit global config
+│       ├── create.go              # Create flow: project picker → name input → clone → navigate
+│       └── styles.go              # Shared lipgloss styles
 ```
 
 ### How It Fits Together
 
-1. `cmd/root.go` defines an `App` struct that holds DB, three repositories (CellRepository, ConfigRepository, RepoRepository), config, worktree manager, and tmux manager. `PersistentPreRunE` initializes everything and verifies queen branch integrity; `PersistentPostRunE` closes the DB.
-2. Commands access the app context via `cmd.Context()`.
-3. All git/tmux/docker operations go through `internal/shell` exec helpers — never called directly from commands.
-4. State lives in `~/.hive/state.db` (SQLite). Four tables: `cells`, `notifications`, `global_config`, `repos`.
-5. Config is DB-first: `PersistentPreRunE` looks up the registered repo in the `repos` table and loads its JSON config. Falls back to `.hive.yaml` if the repo isn't registered.
+1. `cmd/root.go` defines an `App` struct that holds DB, CellRepository, NotificationRepository, GlobalConfig, CloneManager, and TmuxManager. `PersistentPreRunE` initializes everything; `PersistentPostRunE` closes the DB.
+2. `hive start` creates a tmux session named `hive` running `hive dashboard`, then attaches to it.
+3. The dashboard TUI is the primary interface. It uses `internal/cell.Service` for cell lifecycle operations.
+4. `cell.Service` orchestrates: clone repo → allocate ports → create tmux session → run hooks → apply layout → record in DB. Rollback on failure at any step.
+5. Navigation between cells uses `tmux switch-client` from within the TUI — the dashboard never exits.
+6. State lives in `~/.hive/state.db` (SQLite). Two tables: `cells`, `notifications`.
+7. Config lives in YAML files: `~/.hive/config.yaml` (global) and `~/.hive/config/{project}.yml` (per-project).
+
+## Config
+
+### Global (`~/.hive/config.yaml`)
+
+```yaml
+project_dirs:          # Directories to scan for git repos (one level deep)
+  - ~/side_projects
+  - ~/work
+cells_dir: ~/hive/cells  # Where cell clones are stored
+editor: vim              # Editor for config editing from dashboard
+tmux_leader: "C-a"       # Tmux leader key
+```
+
+### Per-Project (`~/.hive/config/{project}.yml`)
+
+```yaml
+repo_path: ~/side_projects/my-api  # Resolved automatically from discovery
+hooks:                             # Run after cloning
+  - npm install
+  - npm run db:migrate
+env:                               # Injected into tmux session
+  NODE_ENV: development
+port_vars:                         # Auto-assigned unique ports
+  - PORT
+  - DB_PORT
+layouts:
+  default:                         # Auto-applied on cell creation
+    windows:
+      - name: code
+        panes:
+          - command: nvim .
+      - name: server
+        panes:
+          - command: npm run dev
+```
 
 ## Patterns & Conventions
 
 ### Command Structure
 
-Each command is a file in `cmd/` with a package-level `*cobra.Command` var and an `init()` that registers it with `rootCmd`. Commands use `RunE` (not `Run`) to propagate errors. Commands that take a cell name argument use `ValidArgsFunction: completeCellNames` for shell completion.
+Each command is a file in `cmd/` with a package-level `*cobra.Command` var and an `init()` that registers it with `rootCmd`. Commands use `RunE` (not `Run`) to propagate errors.
 
 ### Error Handling
 
-- Wrap errors with context: `fmt.Errorf("creating worktree: %w", err)`
+- Wrap errors with context: `fmt.Errorf("cloning repo: %w", err)`
 - Multi-step operations use rollback-on-failure: if step 3 fails, undo steps 1-2
 - Shell command results check `ExitCode` explicitly (not just error)
 
 ### State Management
 
 - All repo methods take `context.Context` as first arg
-- Cell status transitions: `provisioning` -> `running` -> `stopped` -> `error`
+- Cell status: `running`, `stopped`, `error`
+- Cell types: `normal`, `headless`
 - Timestamps are managed by the repo layer, not callers
 
 ### Tmux Integration
 
-- Hive owns tmux. Sessions are created/managed only through Hive, never directly.
-- `join` uses `syscall.Exec` to replace the current process (keeps terminal responsive)
-- Inside tmux: `switch-client`. Outside: `attach-session`.
+- The dashboard is a tmux session named `hive` running the TUI
+- Navigation uses `tmux switch-client` — the dashboard keeps running
+- From any cell, `<leader>+h` switches back to the dashboard
+- `hive start` handles attach vs switch-client based on `$TMUX`
 
 ### Shell Execution
 
@@ -127,64 +149,36 @@ Each command is a file in `cmd/` with a package-level `*cobra.Command` var and a
 - `shell.RunInDirWithEnv(ctx, dir, env, name, args...)` — run with extra env vars
 - All return `RunResult{Stdout, Stderr, ExitCode}`
 
+### Cell Service (`internal/cell/service.go`)
+
+All cell lifecycle logic is in one package:
+- `Create(ctx, CreateOpts)` — clone + ports + tmux + hooks + layout + DB
+- `Kill(ctx, cellName)` — tmux kill + rm clone + DB delete
+- `CreateHeadless(ctx, name)` — tmux session + DB
+- `List(ctx)` — all cells from DB
+
 ### Setup Hooks
 
-- Defined as a list of shell commands in `ProjectConfig.Hooks`
-- Run sequentially in the cell's worktree directory on `hive cell`
-- Abort on first failure — results written to `hook_results.txt` in the worktree
-- Hook commands receive the cell's full environment (ports, static env, `HIVE_CELL`, `HIVE_QUEEN_DIR`)
+- Defined in per-project config (`~/.hive/config/{project}.yml`)
+- Run sequentially in the cell's clone directory
+- Abort on first failure — results written to `hook_results.txt`
+- Hook commands receive the cell's full environment (ports, static env, `HIVE_CELL`)
 
 ### Port Allocation
 
-- Configured via `ProjectConfig.PortVars` — a list of env var names (e.g., `["PORT", "DB_PORT"]`)
+- Configured via `ProjectConfig.PortVars`
 - `ports.Allocator` assigns unique ports from range 3001-9999, checking both the DB and OS (`lsof`) for conflicts
 - Allocated ports are stored as JSON in `cells.ports` and injected as env vars into the tmux session
 
 ### Layouts
 
-- Defined in `ProjectConfig.Layouts` (repo-level) or `global_config` (global-level, via `hive config apply --global`)
-- A `"default"` layout is auto-applied on cell creation
+- Defined in per-project config under `layouts.default`
+- Auto-applied on cell creation
 - Layouts define tmux windows and panes with optional commands and split directions
 
 ## Build & Test
 
 ```bash
 go build -o hive .          # Build
-go test ./internal/state/... # Test state layer (uses :memory: SQLite)
-go test ./internal/worktree/... # Test worktree (needs git)
 go test ./...               # All tests
 ```
-
-## Current State & Roadmap
-
-### Working Now
-- `hive install` — one-time machine bootstrap (cells dir, projects dir, tmux.conf)
-- `hive setup` — interactive repo registration (project name, remote, default branch, config)
-- `hive config` — show/export/import/apply config with DB-first approach
-- Cell creation (`hive cell`) — worktree + tmux + DB + port allocation + hooks + layout
-- Queen session auto-creation on first `hive cell` for a project
-- Headless cells (`hive cell --headless`) — tmux session in any directory
-- Cell joining (`hive join`) and switching (`hive switch` via fzf)
-- Cell status listing (`hive status`) with cell type labels, port display, age
-- Cell destruction (`hive kill`) with branch cleanup, queen/headless-aware paths
-- Setup hooks (abort-on-first-failure, env var passthrough)
-- Port allocation (3001-9999 range, DB + OS conflict checking)
-- Tmux layouts (windows, panes, auto-apply "default" layout)
-- Env var injection (port vars + static env + `HIVE_CELL` + `HIVE_QUEEN_DIR`)
-- SQLite state with four tables: `cells`, `notifications`, `global_config`, `repos`
-- Config merge via `hive config apply` (upsert semantics)
-- Cell name prefixing (project name or `cell_prefix` config; headless cells excluded)
-- Shell completion for commands and cell names (`hive completion bash/zsh/fish`)
-- Tmux keybindings (`hive keybindings`) — table mode or direct mode, leader key configurable
-- Notifications (`hive notify`, `hive notifications`) — agents send notifications from inside cells
-- TUI dashboard (`hive dashboard`) — Bubble Tea tree view with switch, kill, notification actions
-- File logging to `~/.hive/hive.log` with `hive logs` to tail it
-- Graceful kill for orphaned cells (tmux session lost but DB record remains)
-
-### Next Up (in priority order)
-1. Background cron tasks (periodic git fetch)
-2. `hive up` / `hive down` / `hive stop` — start/stop project services (deferred, needs rethinking)
-3. Caddy reverse proxy (`<name>.dev.local` routing) (deferred, needs rethinking)
-
-### Networking Strategy
-Port allocation comes first — Hive assigns unique ports per cell via env vars, no containers needed. Caddy reverse proxy (`<name>.dev.local`) is a later addition for projects that want URL-based routing via Docker.

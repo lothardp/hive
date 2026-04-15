@@ -6,10 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
+	"github.com/lothardp/hive/internal/config"
 	"github.com/lothardp/hive/internal/keybindings"
-	"github.com/lothardp/hive/internal/shell"
 	"github.com/spf13/cobra"
 )
 
@@ -18,57 +17,50 @@ var installCmd = &cobra.Command{
 	Short: "One-time Hive setup for this machine",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx := cmd.Context()
 		reader := bufio.NewReader(os.Stdin)
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("getting home directory: %w", err)
+		}
+		hiveDir := filepath.Join(home, ".hive")
 
-		// Check if already installed
-		installedAt, _ := app.ConfigRepo.Get(ctx, "installed_at")
-		if installedAt != "" {
-			fmt.Printf("Hive was already installed on %s\n", installedAt)
-			fmt.Print("Re-run setup? [y/N] ")
-			answer, _ := reader.ReadString('\n')
-			if strings.TrimSpace(strings.ToLower(answer)) != "y" {
-				return nil
+		// 1. Create ~/.hive/ if missing
+		if err := os.MkdirAll(hiveDir, 0o755); err != nil {
+			return fmt.Errorf("creating hive directory: %w", err)
+		}
+		fmt.Printf("Hive directory: %s\n", hiveDir)
+
+		// 2. Create ~/.hive/config/ for per-project configs
+		configDir := filepath.Join(hiveDir, "config")
+		if err := os.MkdirAll(configDir, 0o755); err != nil {
+			return fmt.Errorf("creating config directory: %w", err)
+		}
+
+		// 3. Prompt for project directories (comma-separated)
+		defaultProjectDirs := filepath.Join(home, "side_projects")
+		fmt.Printf("\nProject directories (comma-separated, where your repos live) [%s]: ", defaultProjectDirs)
+		projInput, _ := reader.ReadString('\n')
+		projInput = strings.TrimSpace(projInput)
+
+		var projectDirs []string
+		if projInput == "" {
+			projectDirs = []string{defaultProjectDirs}
+		} else {
+			for _, d := range strings.Split(projInput, ",") {
+				d = strings.TrimSpace(d)
+				if d == "" {
+					continue
+				}
+				if strings.HasPrefix(d, "~/") {
+					d = filepath.Join(home, d[2:])
+				}
+				projectDirs = append(projectDirs, d)
 			}
 		}
 
-		fmt.Printf("Hive directory: %s\n", app.HiveDir)
-
-		// Generate tmux.conf with keybindings
-		tmuxConfPath := filepath.Join(app.HiveDir, "tmux.conf")
-		leader, _ := app.ConfigRepo.Get(ctx, "keybinding_leader")
-		if leader == "" {
-			leader = keybindings.DefaultLeader
-		}
-		direct := false
-		if saved, _ := app.ConfigRepo.Get(ctx, "keybinding_direct"); saved == "true" {
-			direct = true
-		}
-		tmuxVer, _ := keybindings.TmuxVersion(ctx)
-		tmuxConf := keybindings.Generate(leader, tmuxVer, direct)
-		if err := os.WriteFile(tmuxConfPath, []byte(tmuxConf), 0o644); err != nil {
-			return fmt.Errorf("writing tmux.conf: %w", err)
-		}
-		fmt.Printf("Wrote %s\n", tmuxConfPath)
-
-		// Best-effort reload into tmux
-		if res, err := shell.Run(ctx, "tmux", "source-file", tmuxConfPath); err == nil && res.ExitCode == 0 {
-			fmt.Println("Keybindings loaded into tmux")
-		}
-
-		// Check if tmux.conf is sourced
-		printTmuxInstructions(tmuxConfPath)
-
-		home, _ := os.UserHomeDir()
-
-		// Prompt for cells directory (where worktrees are created)
+		// 4. Prompt for cells directory
 		defaultCellsDir := filepath.Join(home, "hive", "cells")
-		existingCellsDir, _ := app.ConfigRepo.Get(ctx, "cells_dir")
-		if existingCellsDir != "" {
-			defaultCellsDir = existingCellsDir
-		}
-
-		fmt.Printf("\nCells directory (where worktrees are created) [%s]: ", defaultCellsDir)
+		fmt.Printf("Cells directory (where clones are stored) [%s]: ", defaultCellsDir)
 		cellsInput, _ := reader.ReadString('\n')
 		cellsInput = strings.TrimSpace(cellsInput)
 		if cellsInput == "" {
@@ -78,52 +70,52 @@ var installCmd = &cobra.Command{
 			cellsInput = filepath.Join(home, cellsInput[2:])
 		}
 
+		// 5. Prompt for editor
+		defaultEditor := os.Getenv("EDITOR")
+		if defaultEditor == "" {
+			defaultEditor = "vim"
+		}
+		fmt.Printf("Editor [%s]: ", defaultEditor)
+		editorInput, _ := reader.ReadString('\n')
+		editorInput = strings.TrimSpace(editorInput)
+		if editorInput == "" {
+			editorInput = defaultEditor
+		}
+
+		// 6. Write ~/.hive/config.yaml using config.WriteDefaultGlobal
+		cfg := &config.GlobalConfig{
+			ProjectDirs: projectDirs,
+			CellsDir:    cellsInput,
+			Editor:       editorInput,
+		}
+		if err := config.WriteDefaultGlobal(hiveDir, cfg); err != nil {
+			return fmt.Errorf("writing global config: %w", err)
+		}
+		fmt.Printf("Wrote %s\n", filepath.Join(hiveDir, "config.yaml"))
+
+		// 7. Create cells directory if missing
 		if _, err := os.Stat(cellsInput); os.IsNotExist(err) {
-			fmt.Printf("Directory %s does not exist. Create it? [Y/n] ", cellsInput)
-			answer, _ := reader.ReadString('\n')
-			answer = strings.TrimSpace(strings.ToLower(answer))
-			if answer == "" || answer == "y" {
-				if err := os.MkdirAll(cellsInput, 0o755); err != nil {
-					return fmt.Errorf("creating cells directory: %w", err)
-				}
-				fmt.Printf("Created %s\n", cellsInput)
+			if err := os.MkdirAll(cellsInput, 0o755); err != nil {
+				return fmt.Errorf("creating cells directory: %w", err)
 			}
+			fmt.Printf("Created %s\n", cellsInput)
 		}
 
-		if err := app.ConfigRepo.Set(ctx, "cells_dir", cellsInput); err != nil {
-			return fmt.Errorf("saving cells directory: %w", err)
+		// 8. Generate ~/.hive/tmux.conf
+		tmuxConfPath := filepath.Join(hiveDir, "tmux.conf")
+		tmuxConf := keybindings.GenerateTmuxConf()
+		if err := os.WriteFile(tmuxConfPath, []byte(tmuxConf), 0o644); err != nil {
+			return fmt.Errorf("writing tmux.conf: %w", err)
 		}
+		fmt.Printf("Wrote %s\n", tmuxConfPath)
 
-		// Prompt for projects directory (hint for repo discovery)
-		defaultDir := filepath.Join(home, "side_projects")
-		existing, _ := app.ConfigRepo.Get(ctx, "projects_dir")
-		if existing != "" {
-			defaultDir = existing
-		}
-
-		fmt.Printf("Projects directory (where your repos live) [%s]: ", defaultDir)
-		input, _ := reader.ReadString('\n')
-		input = strings.TrimSpace(input)
-		if input == "" {
-			input = defaultDir
-		}
-		if strings.HasPrefix(input, "~/") {
-			input = filepath.Join(home, input[2:])
-		}
-
-		if err := app.ConfigRepo.Set(ctx, "projects_dir", input); err != nil {
-			return fmt.Errorf("saving projects directory: %w", err)
-		}
-
-		// Mark as installed
-		if err := app.ConfigRepo.Set(ctx, "installed_at", time.Now().Format(time.RFC3339)); err != nil {
-			return fmt.Errorf("saving install timestamp: %w", err)
-		}
+		// 9. Print instructions to source tmux.conf
+		printTmuxInstructions(tmuxConfPath)
 
 		fmt.Println("\nHive installed successfully!")
-		fmt.Printf("  Config:   %s/state.db\n", app.HiveDir)
+		fmt.Printf("  Config:   %s\n", filepath.Join(hiveDir, "config.yaml"))
 		fmt.Printf("  Cells:    %s\n", cellsInput)
-		fmt.Printf("  Projects: %s\n", input)
+		fmt.Printf("  Projects: %s\n", strings.Join(projectDirs, ", "))
 		return nil
 	},
 }

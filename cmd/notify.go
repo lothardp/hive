@@ -27,7 +27,7 @@ var notifyCmd = &cobra.Command{
 			return fmt.Errorf("not inside a Hive cell (HIVE_CELL not set)")
 		}
 
-		cell, err := app.Repo.GetByName(ctx, cellName)
+		cell, err := app.CellRepo.GetByName(ctx, cellName)
 		if err != nil {
 			return fmt.Errorf("looking up cell: %w", err)
 		}

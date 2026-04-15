@@ -37,7 +37,7 @@ func (m *Manager) CreateSession(ctx context.Context, name, workDir string, env m
 
 // SessionExists checks if a tmux session with the given name exists.
 func (m *Manager) SessionExists(ctx context.Context, name string) (bool, error) {
-	res, err := shell.Run(ctx, "tmux", "has-session", "-t", name)
+	res, err := shell.Run(ctx, "tmux", "has-session", "-t=", name)
 	if err != nil {
 		return false, fmt.Errorf("checking tmux session: %w", err)
 	}

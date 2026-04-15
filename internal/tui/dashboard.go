@@ -4,67 +4,45 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"sort"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"github.com/lothardp/hive/internal/cell"
+	"github.com/lothardp/hive/internal/clone"
+	"github.com/lothardp/hive/internal/config"
 	"github.com/lothardp/hive/internal/state"
 	"github.com/lothardp/hive/internal/tmux"
-	"github.com/lothardp/hive/internal/worktree"
 )
 
-// Styles
-var (
-	projectStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("4"))
-	queenStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
-	headlessStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	selectedStyle = lipgloss.NewStyle().Background(lipgloss.Color("8")).Bold(true)
-	statusAlive   = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
-	statusDead    = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
-	unreadStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Bold(true)
-	helpStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	titleStyle    = lipgloss.NewStyle().Bold(true).Padding(0, 1)
-	confirmStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Bold(true)
+const (
+	tabCells    = 0
+	tabProjects = 1
+	tabConfig   = 2
 )
 
-// row is one line in the tree view — a project header, a cell, or an unmanaged tmux session.
-type row struct {
-	isProject   bool
-	project     string
-	cell        *state.Cell
-	tmuxAlive   bool
-	unread      int
-	tmuxSession string // non-empty for unmanaged tmux sessions (cell is nil)
-}
+var tabNames = []string{"Cells", "Projects", "Config"}
 
-// Model is the Bubble Tea model for the dashboard.
+// Model is the root Bubble Tea model for the dashboard.
 type Model struct {
-	rows     []row
-	cursor   int
-	width    int
-	height   int
-	quitting bool
+	activeTab int
+	cells     CellsModel
+	projects  ProjectsModel
+	configTab ConfigModel
+
+	// Create flow overlay
+	creating      *CreateModel
+	// Headless create overlay
+	creatingHL    bool
+	headlessInput string
 
 	// Dependencies
-	cellRepo  *state.CellRepository
-	notifRepo *state.NotificationRepository
-	tmuxMgr   *tmux.Manager
-	wtMgr     *worktree.Manager
-	db        *sql.DB
-	repoDir   string
+	cellService *cell.Service
+	globalCfg   *config.GlobalConfig
+	hiveDir     string
 
-	// UI state
-	confirming  bool
-	confirmName string
-	creating    bool
-	createInput string
-	message     string
-
-	// Output — read by cmd layer after tea.Quit
-	SwitchTarget string
+	width, height int
+	quitting      bool
 }
 
 // NewModel creates a dashboard model with required dependencies.
@@ -72,33 +50,38 @@ func NewModel(
 	cellRepo *state.CellRepository,
 	notifRepo *state.NotificationRepository,
 	tmuxMgr *tmux.Manager,
-	wtMgr *worktree.Manager,
+	cloneMgr *clone.Manager,
+	globalCfg *config.GlobalConfig,
+	hiveDir string,
 	db *sql.DB,
-	repoDir string,
 ) Model {
+	svc := &cell.Service{
+		CellRepo: cellRepo,
+		CloneMgr: cloneMgr,
+		TmuxMgr:  tmuxMgr,
+		HiveDir:  hiveDir,
+		DB:       db,
+	}
+
+	editor := globalCfg.ResolveEditor()
+
 	return Model{
-		cellRepo:  cellRepo,
-		notifRepo: notifRepo,
-		tmuxMgr:   tmuxMgr,
-		wtMgr:     wtMgr,
-		db:        db,
-		repoDir:   repoDir,
+		cells:       NewCellsModel(svc, notifRepo, tmuxMgr),
+		projects:    NewProjectsModel(hiveDir, editor),
+		configTab:   NewConfigModel(hiveDir, editor),
+		cellService: svc,
+		globalCfg:   globalCfg,
+		hiveDir:     hiveDir,
 	}
 }
 
-// Messages
-
-type cellsLoaded struct{ rows []row }
-type cellKilled struct{ name string }
-type killFailed struct {
-	name string
-	err  error
-}
-type clearMsg struct{}
-
-// Init loads cells on startup.
+// Init loads initial data.
 func (m Model) Init() tea.Cmd {
-	return m.loadCells
+	return tea.Batch(
+		m.cells.LoadCells(),
+		m.projects.LoadProjects(m.globalCfg),
+		m.configTab.LoadConfig(),
+	)
 }
 
 // Update handles messages.
@@ -109,151 +92,158 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 
-	case cellsLoaded:
-		m.rows = msg.rows
-		if m.cursor >= len(m.rows) {
-			m.cursor = len(m.rows) - 1
-		}
-		if m.cursor < 0 {
-			m.cursor = 0
-		}
-		m.skipToCell(1)
-		return m, nil
+	case headlessCreated:
+		m.cells.message = fmt.Sprintf("Headless cell %q created", msg.name)
+		return m, tea.Batch(m.cells.LoadCells(), switchToSession(msg.name))
 
-	case cellKilled:
-		m.message = fmt.Sprintf("Killed %q", msg.name)
-		m.confirming = false
-		m.confirmName = ""
-		return m, tea.Batch(m.loadCells, clearAfter(3*time.Second))
-
-	case killFailed:
-		m.message = fmt.Sprintf("Kill %q failed: %v", msg.name, msg.err)
-		m.confirming = false
-		m.confirmName = ""
-		return m, clearAfter(3*time.Second)
-
-	case clearMsg:
-		m.message = ""
-		return m, nil
-
-	case tea.KeyMsg:
-		if m.creating {
-			return m.updateCreating(msg)
-		}
-		if m.confirming {
-			return m.updateConfirming(msg)
-		}
-		return m.updateNormal(msg)
-	}
-
-	return m, nil
-}
-
-func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch {
-	case key.Matches(msg, keys.Quit):
-		m.quitting = true
-		return m, tea.Quit
-
-	case key.Matches(msg, keys.Up):
-		m.cursor--
-		if m.cursor < 0 {
-			m.cursor = 0
-		}
-		m.skipToCell(-1)
-		return m, nil
-
-	case key.Matches(msg, keys.Down):
-		m.cursor++
-		if m.cursor >= len(m.rows) {
-			m.cursor = len(m.rows) - 1
-		}
-		m.skipToCell(1)
-		return m, nil
-
-	case key.Matches(msg, keys.Enter):
-		if r := m.selectedRow(); r != nil {
-			if r.cell != nil {
-				m.SwitchTarget = r.cell.Name
-				m.quitting = true
-				return m, tea.Quit
-			}
-			if r.tmuxSession != "" {
-				m.SwitchTarget = r.tmuxSession
-				m.quitting = true
-				return m, tea.Quit
-			}
-		}
-		return m, nil
-
-	case key.Matches(msg, keys.Kill):
-		if r := m.selectedRow(); r != nil && r.cell != nil {
-			m.confirming = true
-			m.confirmName = r.cell.Name
-		}
-		return m, nil
-
-	case key.Matches(msg, keys.Notifs):
-		if r := m.selectedRow(); r != nil && r.cell != nil && r.unread > 0 {
-			ctx := context.Background()
-			count, _ := m.notifRepo.MarkReadByCell(ctx, r.cell.Name)
-			m.message = fmt.Sprintf("Marked %d notification(s) read for %s", count, r.cell.Name)
-			return m, tea.Batch(m.loadCells, clearAfter(3*time.Second))
-		}
-		return m, nil
-
-	case key.Matches(msg, keys.Create):
-		m.creating = true
-		m.createInput = ""
-		return m, nil
-
-	case key.Matches(msg, keys.Refresh):
-		return m, m.loadCells
-	}
-
-	return m, nil
-}
-
-func (m Model) updateConfirming(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "y", "Y":
-		return m, m.killCell(m.confirmName)
-	default:
-		m.confirming = false
-		m.confirmName = ""
+	case headlessFailed:
+		m.cells.message = fmt.Sprintf("Headless create failed: %v", msg.err)
 		return m, nil
 	}
-}
 
-func (m Model) updateCreating(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
-	case tea.KeyEnter:
-		name := strings.TrimSpace(m.createInput)
-		m.creating = false
-		m.createInput = ""
-		if name == "" {
+	// If creating a cell, delegate to the create overlay
+	if m.creating != nil {
+		return m.updateCreating(msg)
+	}
+
+	// If creating a headless cell, handle that
+	if m.creatingHL {
+		return m.updateHeadless(msg)
+	}
+
+	// Handle tab-level key events first
+	if msg, ok := msg.(tea.KeyMsg); ok {
+		switch {
+		case key.Matches(msg, dashKeys.Quit):
+			m.quitting = true
+			return m, tea.Quit
+
+		case key.Matches(msg, dashKeys.Tab):
+			m.activeTab = (m.activeTab + 1) % len(tabNames)
+			return m, nil
+
+		case key.Matches(msg, dashKeys.ShiftTab):
+			m.activeTab = (m.activeTab - 1 + len(tabNames)) % len(tabNames)
+			return m, nil
+
+		// Create actions (only from cells tab)
+		case m.activeTab == tabCells && key.Matches(msg, dashKeys.Create):
+			return m.startCreate()
+
+		case m.activeTab == tabCells && key.Matches(msg, dashKeys.Headless):
+			m.creatingHL = true
+			m.headlessInput = ""
 			return m, nil
 		}
-		m.message = fmt.Sprintf("Run: hive cell %s", name)
-		return m, clearAfter(5 * time.Second)
-	case tea.KeyEscape:
-		m.creating = false
-		m.createInput = ""
-		return m, nil
-	case tea.KeyBackspace:
-		if len(m.createInput) > 0 {
-			m.createInput = m.createInput[:len(m.createInput)-1]
+	}
+
+	// Route data messages to their owning tab regardless of active tab.
+	var cmd tea.Cmd
+	switch msg.(type) {
+	case cellsLoaded, cellKilled, killFailed, cellSwitched, clearMsg:
+		m.cells, cmd = m.cells.Update(msg)
+		return m, cmd
+	case projectsLoaded, editorFinished:
+		m.projects, cmd = m.projects.Update(msg)
+		if _, ok := msg.(editorFinished); ok {
+			m.globalCfg = config.LoadGlobalOrDefault(m.hiveDir)
 		}
-		return m, nil
-	default:
-		if msg.Type == tea.KeyRunes {
-			m.createInput += string(msg.Runes)
+		return m, cmd
+	case configLoaded, configEditorFinished:
+		m.configTab, cmd = m.configTab.Update(msg)
+		if _, ok := msg.(configEditorFinished); ok {
+			m.globalCfg = config.LoadGlobalOrDefault(m.hiveDir)
 		}
+		return m, cmd
+	}
+
+	// Key events go to the active tab.
+	switch m.activeTab {
+	case tabCells:
+		m.cells, cmd = m.cells.Update(msg)
+	case tabProjects:
+		m.projects, cmd = m.projects.Update(msg)
+	case tabConfig:
+		m.configTab, cmd = m.configTab.Update(msg)
+	}
+
+	return m, cmd
+}
+
+func (m Model) startCreate() (tea.Model, tea.Cmd) {
+	// Discover projects for the picker
+	dirs := m.globalCfg.ResolveProjectDirs()
+	projects, _ := config.DiscoverProjects(dirs)
+	if len(projects) == 0 {
+		m.cells.message = "No projects found. Configure project_dirs first."
 		return m, nil
+	}
+	m.creating = NewCreateModel(m.cellService, projects)
+	return m, nil
+}
+
+func (m Model) updateCreating(msg tea.Msg) (tea.Model, tea.Cmd) {
+	updated, cmd := m.creating.Update(msg)
+	if updated == nil {
+		// Create flow dismissed
+		m.creating = nil
+		return m, m.cells.LoadCells()
+	}
+	m.creating = updated
+	return m, cmd
+}
+
+func (m Model) updateHeadless(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if msg, ok := msg.(tea.KeyMsg); ok {
+		switch msg.Type {
+		case tea.KeyEscape:
+			m.creatingHL = false
+			m.headlessInput = ""
+			return m, nil
+
+		case tea.KeyEnter:
+			name := strings.TrimSpace(m.headlessInput)
+			m.creatingHL = false
+			m.headlessInput = ""
+			if name == "" {
+				return m, nil
+			}
+			return m, m.doCreateHeadless(name)
+
+		case tea.KeyBackspace:
+			if len(m.headlessInput) > 0 {
+				m.headlessInput = m.headlessInput[:len(m.headlessInput)-1]
+			}
+			return m, nil
+
+		default:
+			if msg.Type == tea.KeyRunes {
+				m.headlessInput += string(msg.Runes)
+			}
+			return m, nil
+		}
+	}
+	return m, nil
+}
+
+type headlessCreated struct{ name string }
+type headlessFailed struct {
+	name string
+	err  error
+}
+
+func (m Model) doCreateHeadless(name string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		_, err := m.cellService.CreateHeadless(ctx, name)
+		if err != nil {
+			return headlessFailed{name, err}
+		}
+		return headlessCreated{name}
 	}
 }
 
-// View renders the dashboard.
+// View renders the full dashboard.
 func (m Model) View() string {
 	if m.quitting {
 		return ""
@@ -261,273 +251,86 @@ func (m Model) View() string {
 
 	var b strings.Builder
 
-	b.WriteString(titleStyle.Render("Hive Dashboard"))
+	// Title + tabs
+	b.WriteString(m.renderHeader())
 	b.WriteString("\n\n")
 
-	if len(m.rows) == 0 {
-		b.WriteString("  No cells. Press c to create one.\n")
+	// Create overlay takes over the content area
+	if m.creating != nil {
+		b.WriteString(m.creating.View(m.width, m.height))
+		b.WriteString("\n")
+		return b.String()
 	}
 
-	for i, r := range m.rows {
-		selected := i == m.cursor
+	// Headless create prompt
+	if m.creatingHL {
+		b.WriteString(fmt.Sprintf("  Headless cell name: %s█\n", m.headlessInput))
+		b.WriteString("\n  " + helpStyle.Render("enter create  esc cancel") + "\n")
+		return b.String()
+	}
 
-		if r.isProject {
-			line := fmt.Sprintf("▼ %s", r.project)
-			if selected {
-				b.WriteString(selectedStyle.Render(line))
-			} else {
-				b.WriteString(projectStyle.Render(line))
-			}
-			b.WriteString("\n")
-			continue
-		}
-
-		// Unmanaged tmux session
-		if r.tmuxSession != "" {
-			line := fmt.Sprintf("      %-28s %-20s %s", r.tmuxSession, "", statusAlive.Render("●"))
-			if selected {
-				line = selectedStyle.Render(line)
-			} else {
-				line = headlessStyle.Render(line)
-			}
-			b.WriteString(line)
-			b.WriteString("\n")
-			continue
-		}
-
-		c := r.cell
-
-		// Name with type indicator
-		var name string
-		switch c.Type {
-		case state.TypeQueen:
-			name = "♛ " + c.Name
-		case state.TypeHeadless:
-			name = "◇ " + c.Name
-		default:
-			name = "  " + c.Name
-		}
-
-		// Branch
-		branch := c.Branch
-		if branch == "" {
-			branch = "-"
-		}
-
-		// Tmux status indicator
-		var indicator string
-		if r.tmuxAlive {
-			indicator = statusAlive.Render("●")
-		} else {
-			indicator = statusDead.Render("○")
-		}
-
-		// Age
-		age := formatAge(time.Since(c.CreatedAt))
-
-		line := fmt.Sprintf("    %-30s %-20s %s  %s", name, branch, indicator, age)
-
-		// Unread notifications
-		if r.unread > 0 {
-			line += "  " + unreadStyle.Render(fmt.Sprintf("(%d unread)", r.unread))
-		}
-
-		if selected {
-			if c.Type == state.TypeQueen {
-				line = selectedStyle.Foreground(lipgloss.Color("3")).Render(line)
-			} else {
-				line = selectedStyle.Render(line)
-			}
-		} else {
-			switch c.Type {
-			case state.TypeQueen:
-				line = queenStyle.Render(line)
-			case state.TypeHeadless:
-				line = headlessStyle.Render(line)
-			}
-		}
-
-		b.WriteString(line)
-		b.WriteString("\n")
+	// Active tab content
+	switch m.activeTab {
+	case tabCells:
+		b.WriteString(m.cells.View(m.width))
+	case tabProjects:
+		b.WriteString(m.projects.View(m.width))
+	case tabConfig:
+		b.WriteString(m.configTab.View(m.width))
 	}
 
 	// Footer
 	b.WriteString("\n")
-
-	if m.confirming {
-		b.WriteString(confirmStyle.Render(fmt.Sprintf("Kill %q? (y/n)", m.confirmName)))
-	} else if m.creating {
-		b.WriteString(fmt.Sprintf("Cell name: %s█", m.createInput))
-	} else if m.message != "" {
-		b.WriteString(m.message)
-	} else {
-		b.WriteString(helpStyle.Render("↑/↓ navigate  enter switch  x kill  n read notifs  c create  r refresh  q quit"))
+	switch m.activeTab {
+	case tabCells:
+		b.WriteString(m.cells.Footer())
+	case tabProjects:
+		b.WriteString(m.projects.Footer())
+	case tabConfig:
+		b.WriteString(m.configTab.Footer())
 	}
 	b.WriteString("\n")
 
 	return b.String()
 }
 
-// Commands
+func (m Model) renderHeader() string {
+	title := titleStyle.Render("Hive Dashboard")
 
-func (m Model) loadCells() tea.Msg {
-	ctx := context.Background()
-	cells, err := m.cellRepo.List(ctx)
-	if err != nil {
-		return cellsLoaded{}
-	}
-
-	// Group by project
-	byProject := make(map[string][]state.Cell)
-	var projects []string
-	for _, c := range cells {
-		p := c.Project
-		if p == "" {
-			p = "(no project)"
-		}
-		if _, seen := byProject[p]; !seen {
-			projects = append(projects, p)
-		}
-		byProject[p] = append(byProject[p], c)
-	}
-	sort.Strings(projects)
-
-	// Track cell names to find unmanaged tmux sessions
-	cellNames := make(map[string]bool, len(cells))
-	for _, c := range cells {
-		cellNames[c.Name] = true
-	}
-
-	var rows []row
-	for _, p := range projects {
-		rows = append(rows, row{isProject: true, project: p})
-		for i := range byProject[p] {
-			c := byProject[p][i]
-			alive := false
-			if ok, err := m.tmuxMgr.SessionExists(ctx, c.Name); err == nil {
-				alive = ok
-			}
-			unread := 0
-			if n, err := m.notifRepo.CountUnread(ctx, c.Name); err == nil {
-				unread = n
-			}
-			rows = append(rows, row{cell: &c, tmuxAlive: alive, unread: unread})
+	var tabs []string
+	for i, name := range tabNames {
+		if i == m.activeTab {
+			tabs = append(tabs, activeTab.Render(name))
+		} else {
+			tabs = append(tabs, inactiveTab.Render(name))
 		}
 	}
 
-	// Discover unmanaged tmux sessions
-	allSessions, _ := m.tmuxMgr.ListSessions(ctx)
-	var unmanaged []string
-	for _, s := range allSessions {
-		if !cellNames[s] {
-			unmanaged = append(unmanaged, s)
-		}
-	}
-	if len(unmanaged) > 0 {
-		sort.Strings(unmanaged)
-		rows = append(rows, row{isProject: true, project: "Other tmux sessions"})
-		for _, s := range unmanaged {
-			rows = append(rows, row{tmuxSession: s, tmuxAlive: true})
-		}
+	tabBar := strings.Join(tabs, "  ")
+
+	// Put title on left, tabs on right
+	gap := m.width - len("Hive Dashboard") - len("Cells  Projects  Config") - 6
+	if gap < 2 {
+		gap = 2
 	}
 
-	return cellsLoaded{rows: rows}
+	return title + strings.Repeat(" ", gap) + tabBar
 }
 
-func (m Model) killCell(name string) tea.Cmd {
-	return func() tea.Msg {
-		ctx := context.Background()
-		cell, err := m.cellRepo.GetByName(ctx, name)
-		if err != nil || cell == nil {
-			return killFailed{name, fmt.Errorf("cell not found")}
-		}
+// Key bindings for dashboard-level navigation
 
-		// Queen safety: refuse if other cells exist
-		if cell.Type == state.TypeQueen {
-			others, err := m.cellRepo.CountByProject(ctx, cell.Project, state.TypeQueen)
-			if err != nil || others > 0 {
-				return killFailed{name, fmt.Errorf("kill worker cells first")}
-			}
-		}
-
-		// Kill tmux session
-		_ = m.tmuxMgr.KillSession(ctx, name)
-
-		// Normal cells: remove worktree and branch
-		if cell.Type == state.TypeNormal && m.repoDir != "" && m.wtMgr != nil {
-			_ = m.wtMgr.Remove(ctx, m.repoDir, cell.WorktreePath)
-			_ = m.wtMgr.DeleteBranch(ctx, m.repoDir, cell.Branch)
-		}
-
-		// Delete DB record
-		if err := m.cellRepo.Delete(ctx, name); err != nil {
-			return killFailed{name, err}
-		}
-		return cellKilled{name}
-	}
+type dashKeyMap struct {
+	Quit     key.Binding
+	Tab      key.Binding
+	ShiftTab key.Binding
+	Create   key.Binding
+	Headless key.Binding
 }
 
-func clearAfter(d time.Duration) tea.Cmd {
-	return tea.Tick(d, func(time.Time) tea.Msg { return clearMsg{} })
-}
-
-// Helpers
-
-func (m *Model) skipToCell(dir int) {
-	for m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].isProject {
-		m.cursor += dir
-	}
-	if m.cursor < 0 {
-		m.cursor = 0
-		if len(m.rows) > 1 && m.rows[0].isProject {
-			m.cursor = 1
-		}
-	}
-	if m.cursor >= len(m.rows) {
-		m.cursor = len(m.rows) - 1
-	}
-}
-
-func (m Model) selectedRow() *row {
-	if m.cursor >= 0 && m.cursor < len(m.rows) {
-		return &m.rows[m.cursor]
-	}
-	return nil
-}
-
-func formatAge(d time.Duration) string {
-	switch {
-	case d < time.Minute:
-		return fmt.Sprintf("%ds", int(d.Seconds()))
-	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh", int(d.Hours()))
-	default:
-		return fmt.Sprintf("%dd", int(d.Hours()/24))
-	}
-}
-
-// Key bindings
-
-type keyMap struct {
-	Up      key.Binding
-	Down    key.Binding
-	Enter   key.Binding
-	Kill    key.Binding
-	Notifs  key.Binding
-	Create  key.Binding
-	Refresh key.Binding
-	Quit    key.Binding
-}
-
-var keys = keyMap{
-	Up:      key.NewBinding(key.WithKeys("up", "k")),
-	Down:    key.NewBinding(key.WithKeys("down", "j")),
-	Enter:   key.NewBinding(key.WithKeys("enter")),
-	Kill:    key.NewBinding(key.WithKeys("x")),
-	Notifs:  key.NewBinding(key.WithKeys("n")),
-	Create:  key.NewBinding(key.WithKeys("c")),
-	Refresh: key.NewBinding(key.WithKeys("r")),
-	Quit:    key.NewBinding(key.WithKeys("q", "ctrl+c")),
+var dashKeys = dashKeyMap{
+	Quit:     key.NewBinding(key.WithKeys("q", "ctrl+c")),
+	Tab:      key.NewBinding(key.WithKeys("tab")),
+	ShiftTab: key.NewBinding(key.WithKeys("shift+tab")),
+	Create:   key.NewBinding(key.WithKeys("c")),
+	Headless: key.NewBinding(key.WithKeys("h")),
 }
