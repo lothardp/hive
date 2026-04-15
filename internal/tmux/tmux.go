@@ -37,7 +37,8 @@ func (m *Manager) CreateSession(ctx context.Context, name, workDir string, env m
 
 // SessionExists checks if a tmux session with the given name exists.
 func (m *Manager) SessionExists(ctx context.Context, name string) (bool, error) {
-	res, err := shell.Run(ctx, "tmux", "has-session", "-t=", name)
+	// Use -t=name (not -t name) for exact match — without = tmux matches prefixes.
+	res, err := shell.Run(ctx, "tmux", "has-session", "-t="+name)
 	if err != nil {
 		return false, fmt.Errorf("checking tmux session: %w", err)
 	}
@@ -67,7 +68,8 @@ func (m *Manager) KillSession(ctx context.Context, name string) error {
 		return nil
 	}
 
-	res, err := shell.Run(ctx, "tmux", "kill-session", "-t", name)
+	// Use -t=name for exact match (see SessionExists).
+	res, err := shell.Run(ctx, "tmux", "kill-session", "-t="+name)
 	if err != nil {
 		return fmt.Errorf("killing tmux session: %w", err)
 	}

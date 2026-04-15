@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 
 	"github.com/lothardp/hive/internal/clone"
 	"github.com/lothardp/hive/internal/config"
@@ -60,6 +61,12 @@ func (s *Service) Create(ctx context.Context, opts CreateOpts) (*CreateResult, e
 	// Load project config.
 	projectCfg := config.LoadProjectOrDefault(s.HiveDir, opts.Project)
 
+	// Remove any orphaned clone directory (e.g. from a previous failed kill).
+	orphanPath := filepath.Join(s.CloneMgr.CellsDir, opts.Project, opts.Name)
+	if s.CloneMgr.Exists(orphanPath) {
+		_ = s.CloneMgr.Remove(orphanPath)
+	}
+
 	// Clone the repo.
 	clonePath, err := s.CloneMgr.Clone(ctx, opts.RepoPath, opts.Project, opts.Name)
 	if err != nil {
@@ -87,6 +94,10 @@ func (s *Service) Create(ctx context.Context, opts CreateOpts) (*CreateResult, e
 	// Build environment variables.
 	envVars := envars.BuildVars(allocatedPorts, projectCfg.Env)
 	envVars["HIVE_CELL"] = cellName
+	envVars["HIVE_REPO_DIR"] = opts.RepoPath
+
+	// Kill any orphaned tmux session with this name (e.g. from a previous failed kill).
+	_ = s.TmuxMgr.KillSession(ctx, cellName)
 
 	// Create tmux session.
 	if err := s.TmuxMgr.CreateSession(ctx, cellName, clonePath, envVars); err != nil {
