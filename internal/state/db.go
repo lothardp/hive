@@ -43,21 +43,8 @@ func Open(path string) (*sql.DB, error) {
 
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("running migrations: %w", err)
+		return nil, fmt.Errorf("creating schema: %w", err)
 	}
-
-	runMigrations(db)
 
 	return db, nil
-}
-
-func runMigrations(db *sql.DB) {
-	stmts := []string{
-		`ALTER TABLE cells ADD COLUMN type TEXT NOT NULL DEFAULT 'normal'`,
-		`ALTER TABLE notifications ADD COLUMN title TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE notifications ADD COLUMN details TEXT NOT NULL DEFAULT ''`,
-	}
-	for _, stmt := range stmts {
-		_, _ = db.Exec(stmt) // ignore "duplicate column" errors
-	}
 }

@@ -132,34 +132,6 @@ func TestListByStatus(t *testing.T) {
 	}
 }
 
-func TestUpdateStatus(t *testing.T) {
-	repo := setupTestDB(t)
-	ctx := context.Background()
-
-	cell := &Cell{Name: "s", Project: "p", ClonePath: "/tmp/s", Status: StatusRunning, Ports: "{}"}
-	if err := repo.Create(ctx, cell); err != nil {
-		t.Fatalf("creating cell: %v", err)
-	}
-
-	if err := repo.UpdateStatus(ctx, "s", StatusStopped); err != nil {
-		t.Fatalf("updating status: %v", err)
-	}
-
-	got, _ := repo.GetByName(ctx, "s")
-	if got.Status != StatusStopped {
-		t.Errorf("expected stopped, got %s", got.Status)
-	}
-}
-
-func TestUpdateStatusNotFound(t *testing.T) {
-	repo := setupTestDB(t)
-	ctx := context.Background()
-
-	if err := repo.UpdateStatus(ctx, "ghost", StatusRunning); err == nil {
-		t.Fatal("expected error updating nonexistent cell")
-	}
-}
-
 func TestDelete(t *testing.T) {
 	repo := setupTestDB(t)
 	ctx := context.Background()
@@ -270,34 +242,6 @@ func TestCountByProject(t *testing.T) {
 	if count != 0 {
 		t.Errorf("expected 0 for other project, got %d", count)
 	}
-}
-
-func TestMigrationIdempotent(t *testing.T) {
-	// Simulate opening DB twice (upgrade scenario)
-	db, err := Open(":memory:")
-	if err != nil {
-		t.Fatalf("first open: %v", err)
-	}
-
-	// runMigrations is called by Open, call it again to verify idempotency
-	runMigrations(db)
-
-	// Verify we can still create cells with type
-	repo := NewCellRepository(db)
-	ctx := context.Background()
-	cell := &Cell{Name: "test", Project: "p", ClonePath: "/tmp/t", Status: StatusRunning, Ports: "{}", Type: TypeHeadless}
-	if err := repo.Create(ctx, cell); err != nil {
-		t.Fatalf("creating cell after double migration: %v", err)
-	}
-
-	got, err := repo.GetByName(ctx, "test")
-	if err != nil {
-		t.Fatalf("getting cell: %v", err)
-	}
-	if got.Type != TypeHeadless {
-		t.Errorf("expected headless type, got %s", got.Type)
-	}
-	db.Close()
 }
 
 func TestListIncludesType(t *testing.T) {

@@ -81,42 +81,6 @@ func (r *CellRepository) CountByProject(ctx context.Context, project string) (in
 	return count, nil
 }
 
-func (r *CellRepository) UpdateStatus(ctx context.Context, name string, status CellStatus) error {
-	result, err := r.db.ExecContext(ctx,
-		`UPDATE cells SET status = ?, updated_at = ? WHERE name = ?`,
-		status, time.Now(), name,
-	)
-	if err != nil {
-		return fmt.Errorf("updating cell status: %w", err)
-	}
-	n, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("checking rows affected: %w", err)
-	}
-	if n == 0 {
-		return fmt.Errorf("cell %q not found", name)
-	}
-	return nil
-}
-
-func (r *CellRepository) UpdatePorts(ctx context.Context, name, ports string) error {
-	result, err := r.db.ExecContext(ctx,
-		`UPDATE cells SET ports = ?, updated_at = ? WHERE name = ?`,
-		ports, time.Now(), name,
-	)
-	if err != nil {
-		return fmt.Errorf("updating cell ports: %w", err)
-	}
-	n, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("checking rows affected: %w", err)
-	}
-	if n == 0 {
-		return fmt.Errorf("cell %q not found", name)
-	}
-	return nil
-}
-
 func (r *CellRepository) Delete(ctx context.Context, name string) error {
 	result, err := r.db.ExecContext(ctx, `DELETE FROM cells WHERE name = ?`, name)
 	if err != nil {
