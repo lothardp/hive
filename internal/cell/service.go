@@ -211,50 +211,60 @@ func (s *Service) Kill(ctx context.Context, cellName string) error {
 	return nil
 }
 
+// HeadlessOpts holds the parameters for creating a headless cell.
+type HeadlessOpts struct {
+	Name    string // cell name
+	Project string // optional project name (for grouping in DB)
+	Dir     string // optional working directory (defaults to ~)
+}
+
 // CreateHeadless provisions a headless cell: tmux session + DB record, no clone.
-func (s *Service) CreateHeadless(ctx context.Context, name string) (*CreateResult, error) {
-	slog.Info("creating headless cell", "name", name)
+func (s *Service) CreateHeadless(ctx context.Context, opts HeadlessOpts) (*CreateResult, error) {
+	slog.Info("creating headless cell", "name", opts.Name)
 	// Check cell doesn't already exist.
-	existing, err := s.CellRepo.GetByName(ctx, name)
+	existing, err := s.CellRepo.GetByName(ctx, opts.Name)
 	if err != nil {
 		return nil, fmt.Errorf("checking cell existence: %w", err)
 	}
 	if existing != nil {
-		return nil, fmt.Errorf("cell %q already exists", name)
+		return nil, fmt.Errorf("cell %q already exists", opts.Name)
 	}
 
-	// Use home directory as working directory.
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("getting home directory: %w", err)
+	// Resolve working directory.
+	dir := opts.Dir
+	if dir == "" {
+		dir, err = os.UserHomeDir()
+		if err != nil {
+			return nil, fmt.Errorf("getting home directory: %w", err)
+		}
 	}
 
 	// Create tmux session.
-	envVars := map[string]string{"HIVE_CELL": name}
-	if err := s.TmuxMgr.CreateSession(ctx, name, homeDir, envVars); err != nil {
+	envVars := map[string]string{"HIVE_CELL": opts.Name}
+	if err := s.TmuxMgr.CreateSession(ctx, opts.Name, dir, envVars); err != nil {
 		return nil, fmt.Errorf("creating tmux session: %w", err)
 	}
 
 	// Create DB record.
 	cell := &state.Cell{
-		Name:      name,
-		Project:   "",
-		ClonePath: homeDir,
+		Name:      opts.Name,
+		Project:   opts.Project,
+		ClonePath: dir,
 		Status:    state.StatusRunning,
 		Ports:     "{}",
 		Type:      state.TypeHeadless,
 	}
 	if err := s.CellRepo.Create(ctx, cell); err != nil {
 		// Rollback tmux session.
-		if killErr := s.TmuxMgr.KillSession(ctx, name); killErr != nil {
-			slog.Warn("rollback: failed to kill tmux session", "name", name, "error", killErr)
+		if killErr := s.TmuxMgr.KillSession(ctx, opts.Name); killErr != nil {
+			slog.Warn("rollback: failed to kill tmux session", "name", opts.Name, "error", killErr)
 		}
 		return nil, fmt.Errorf("saving cell to database: %w", err)
 	}
 
 	return &CreateResult{
-		CellName:  name,
-		ClonePath: homeDir,
+		CellName:  opts.Name,
+		ClonePath: dir,
 	}, nil
 }
 

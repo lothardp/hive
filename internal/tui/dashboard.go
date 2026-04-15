@@ -36,6 +36,15 @@ type Model struct {
 	creatingHL    bool
 	headlessInput string
 
+	// Open project overlay (headless cell in a project dir)
+	openingProject    bool
+	openProjects      []config.DiscoveredProject
+	openProjectCursor int
+	openProjectFilter string
+	openNameStep      bool
+	openSelectedProj  config.DiscoveredProject
+	openNameInput     string
+
 	// Dependencies
 	cellService *cell.Service
 	globalCfg   *config.GlobalConfig
@@ -112,6 +121,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateHeadless(msg)
 	}
 
+	// If opening a project (headless in project dir), handle that
+	if m.openingProject {
+		return m.updateOpenProject(msg)
+	}
+
 	// Handle tab-level key events first
 	if msg, ok := msg.(tea.KeyMsg); ok {
 		switch {
@@ -136,6 +150,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case m.activeTab == tabCells && key.Matches(msg, dashKeys.Headless):
 			m.creatingHL = true
 			m.headlessInput = ""
+			return m, nil
+
+		case m.activeTab == tabCells && key.Matches(msg, dashKeys.OpenProject):
+			dirs := m.globalCfg.ResolveProjectDirs()
+			projects, _ := config.DiscoverProjects(dirs)
+			if len(projects) == 0 {
+				m.cells.message = "No projects found. Configure project_dirs first."
+				return m, nil
+			}
+			m.openingProject = true
+			m.openProjects = projects
+			m.openProjectCursor = 0
+			m.openProjectFilter = ""
+			m.openNameStep = false
+			m.openNameInput = ""
 			return m, nil
 		}
 	}
@@ -211,7 +240,7 @@ func (m Model) updateHeadless(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if name == "" {
 				return m, nil
 			}
-			return m, m.doCreateHeadless(name)
+			return m, m.doCreateHeadless(name, "", "")
 
 		case tea.KeyBackspace:
 			if len(m.headlessInput) > 0 {
@@ -229,16 +258,153 @@ func (m Model) updateHeadless(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) updateOpenProject(msg tea.Msg) (tea.Model, tea.Cmd) {
+	kmsg, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
+
+	if m.openNameStep {
+		return m.updateOpenProjectName(kmsg)
+	}
+	return m.updateOpenProjectPicker(kmsg)
+}
+
+func (m Model) updateOpenProjectPicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	filtered := m.filteredOpenProjects()
+
+	switch {
+	case msg.Type == tea.KeyEscape:
+		m.openingProject = false
+		return m, nil
+
+	case key.Matches(msg, createKeys.Up):
+		if m.openProjectCursor > 0 {
+			m.openProjectCursor--
+		}
+		return m, nil
+
+	case key.Matches(msg, createKeys.Down):
+		if m.openProjectCursor < len(filtered)-1 {
+			m.openProjectCursor++
+		}
+		return m, nil
+
+	case msg.Type == tea.KeyEnter:
+		if len(filtered) == 0 {
+			return m, nil
+		}
+		m.openSelectedProj = filtered[m.openProjectCursor]
+		m.openNameStep = true
+		m.openNameInput = ""
+		return m, nil
+
+	case msg.Type == tea.KeyBackspace:
+		if len(m.openProjectFilter) > 0 {
+			m.openProjectFilter = m.openProjectFilter[:len(m.openProjectFilter)-1]
+			m.openProjectCursor = 0
+		}
+		return m, nil
+
+	default:
+		if msg.Type == tea.KeyRunes {
+			m.openProjectFilter += string(msg.Runes)
+			m.openProjectCursor = 0
+		}
+		return m, nil
+	}
+}
+
+func (m Model) updateOpenProjectName(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case msg.Type == tea.KeyEscape:
+		m.openNameStep = false
+		return m, nil
+
+	case msg.Type == tea.KeyEnter:
+		name := strings.TrimSpace(m.openNameInput)
+		m.openingProject = false
+		if name == "" {
+			return m, nil
+		}
+		cellName := m.openSelectedProj.Name + "-" + name
+		return m, m.doCreateHeadless(cellName, m.openSelectedProj.Name, m.openSelectedProj.Path)
+
+	case msg.Type == tea.KeyBackspace:
+		if len(m.openNameInput) > 0 {
+			m.openNameInput = m.openNameInput[:len(m.openNameInput)-1]
+		}
+		return m, nil
+
+	default:
+		if msg.Type == tea.KeyRunes {
+			m.openNameInput += string(msg.Runes)
+		}
+		return m, nil
+	}
+}
+
+func (m Model) filteredOpenProjects() []config.DiscoveredProject {
+	if m.openProjectFilter == "" {
+		return m.openProjects
+	}
+	filter := strings.ToLower(m.openProjectFilter)
+	var filtered []config.DiscoveredProject
+	for _, p := range m.openProjects {
+		if strings.Contains(strings.ToLower(p.Name), filter) {
+			filtered = append(filtered, p)
+		}
+	}
+	return filtered
+}
+
+func (m Model) viewOpenProject() string {
+	var b strings.Builder
+
+	if m.openNameStep {
+		b.WriteString("  " + titleStyle.Render("Open Project — Enter name") + "\n\n")
+		b.WriteString(fmt.Sprintf("  Project: %s\n\n", projectStyle.Render(m.openSelectedProj.Name)))
+		b.WriteString(fmt.Sprintf("  Cell name: %s█\n", m.openSelectedProj.Name+"-"+m.openNameInput))
+		b.WriteString("\n")
+		b.WriteString("  " + helpStyle.Render("enter create  esc back"))
+		return b.String()
+	}
+
+	b.WriteString("  " + titleStyle.Render("Open Project — Pick a project") + "\n\n")
+
+	if m.openProjectFilter != "" {
+		b.WriteString(fmt.Sprintf("  Filter: %s\n\n", m.openProjectFilter))
+	}
+
+	filtered := m.filteredOpenProjects()
+	if len(filtered) == 0 {
+		b.WriteString("  No matching projects.\n")
+	}
+
+	for i, p := range filtered {
+		line := fmt.Sprintf("  %-25s %s", p.Name, dimStyle.Render(p.Path))
+		if i == m.openProjectCursor {
+			line = selectedStyle.Render(line)
+		}
+		b.WriteString(line + "\n")
+	}
+
+	b.WriteString("\n")
+	b.WriteString("  " + helpStyle.Render("type to filter  enter select  esc cancel"))
+	return b.String()
+}
+
 type headlessCreated struct{ name string }
 type headlessFailed struct {
 	name string
 	err  error
 }
 
-func (m Model) doCreateHeadless(name string) tea.Cmd {
+func (m Model) doCreateHeadless(name, project, dir string) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
-		_, err := m.cellService.CreateHeadless(ctx, name)
+		opts := cell.HeadlessOpts{Name: name, Project: project, Dir: dir}
+		_, err := m.cellService.CreateHeadless(ctx, opts)
 		if err != nil {
 			return headlessFailed{name, err}
 		}
@@ -279,6 +445,8 @@ func (m Model) View() string {
 	var content string
 	if m.creating != nil {
 		content = m.creating.View(m.width, m.height)
+	} else if m.openingProject {
+		content = m.viewOpenProject()
 	} else if m.creatingHL {
 		content = fmt.Sprintf("  Headless cell name: %s█\n", m.headlessInput)
 		content += "\n  " + helpStyle.Render("enter create  esc cancel") + "\n"
@@ -378,21 +546,23 @@ func (m Model) renderHeader() string {
 // Key bindings for dashboard-level navigation
 
 type dashKeyMap struct {
-	Quit     key.Binding
-	Tab      key.Binding
-	ShiftTab key.Binding
-	NextTab  key.Binding
-	PrevTab  key.Binding
-	Create   key.Binding
-	Headless key.Binding
+	Quit        key.Binding
+	Tab         key.Binding
+	ShiftTab    key.Binding
+	NextTab     key.Binding
+	PrevTab     key.Binding
+	Create      key.Binding
+	Headless    key.Binding
+	OpenProject key.Binding
 }
 
 var dashKeys = dashKeyMap{
-	Quit:     key.NewBinding(key.WithKeys("q", "ctrl+c")),
-	Tab:      key.NewBinding(key.WithKeys("tab")),
-	ShiftTab: key.NewBinding(key.WithKeys("shift+tab")),
-	NextTab:  key.NewBinding(key.WithKeys("l")),
-	PrevTab:  key.NewBinding(key.WithKeys("h")),
-	Create:   key.NewBinding(key.WithKeys("c")),
-	Headless: key.NewBinding(key.WithKeys("H")),
+	Quit:        key.NewBinding(key.WithKeys("q", "ctrl+c")),
+	Tab:         key.NewBinding(key.WithKeys("tab")),
+	ShiftTab:    key.NewBinding(key.WithKeys("shift+tab")),
+	NextTab:     key.NewBinding(key.WithKeys("l")),
+	PrevTab:     key.NewBinding(key.WithKeys("h")),
+	Create:      key.NewBinding(key.WithKeys("c")),
+	Headless:    key.NewBinding(key.WithKeys("H")),
+	OpenProject: key.NewBinding(key.WithKeys("o")),
 }

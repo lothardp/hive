@@ -335,7 +335,7 @@ func (m CellsModel) Footer() string {
 	if m.message != "" {
 		return m.message
 	}
-	return helpStyle.Render("enter switch  c create  H headless  x kill  n read notifs  r refresh  h/l tabs  q quit")
+	return helpStyle.Render("enter switch  c create  o open  H headless  x kill  n read notifs  r refresh  h/l tabs  q quit")
 }
 
 // Helpers
