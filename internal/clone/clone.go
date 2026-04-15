@@ -42,7 +42,6 @@ func (m *Manager) Clone(ctx context.Context, repoPath, project, name string) (st
 	// Copy remotes from the source repo so the clone points at the real
 	// upstream (e.g. GitHub) instead of the local path.
 	if err := copyRemotes(ctx, repoPath, targetPath); err != nil {
-		// Non-fatal — the clone is still usable, just with local remotes.
 		fmt.Fprintf(os.Stderr, "warning: failed to copy remotes: %v\n", err)
 	}
 
@@ -51,7 +50,6 @@ func (m *Manager) Clone(ctx context.Context, repoPath, project, name string) (st
 
 // copyRemotes reads all remotes from srcRepo and sets them on dstRepo.
 func copyRemotes(ctx context.Context, srcRepo, dstRepo string) error {
-	// Get remote names from source
 	res, err := shell.RunInDir(ctx, srcRepo, "git", "remote")
 	if err != nil {
 		return fmt.Errorf("listing remotes: %w", err)
@@ -62,17 +60,15 @@ func copyRemotes(ctx context.Context, srcRepo, dstRepo string) error {
 
 	remotes := strings.Fields(strings.TrimSpace(res.Stdout))
 	for _, name := range remotes {
-		// Get the URL for this remote from the source repo
 		res, err := shell.RunInDir(ctx, srcRepo, "git", "remote", "get-url", name)
 		if err != nil || res.ExitCode != 0 {
 			continue
 		}
 		url := strings.TrimSpace(res.Stdout)
 
-		// Set it on the clone (origin already exists from the clone, others need adding)
+		// origin already exists from the clone, others need adding
 		res, err = shell.RunInDir(ctx, dstRepo, "git", "remote", "set-url", name, url)
 		if err != nil || res.ExitCode != 0 {
-			// Remote doesn't exist in clone yet — add it
 			shell.RunInDir(ctx, dstRepo, "git", "remote", "add", name, url)
 		}
 	}
