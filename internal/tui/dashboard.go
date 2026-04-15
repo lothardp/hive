@@ -42,6 +42,7 @@ type Model struct {
 	hiveDir     string
 
 	width, height int
+	scrollOffset  int
 	quitting      bool
 }
 
@@ -118,12 +119,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			return m, tea.Quit
 
-		case key.Matches(msg, dashKeys.Tab):
+		case key.Matches(msg, dashKeys.Tab), key.Matches(msg, dashKeys.NextTab):
 			m.activeTab = (m.activeTab + 1) % len(tabNames)
+			m.scrollOffset = 0
 			return m, nil
 
-		case key.Matches(msg, dashKeys.ShiftTab):
+		case key.Matches(msg, dashKeys.ShiftTab), key.Matches(msg, dashKeys.PrevTab):
 			m.activeTab = (m.activeTab - 1 + len(tabNames)) % len(tabNames)
+			m.scrollOffset = 0
 			return m, nil
 
 		// Create actions (only from cells tab)
@@ -249,49 +252,104 @@ func (m Model) View() string {
 		return ""
 	}
 
-	var b strings.Builder
+	// Header: title + tabs + blank line = 2 lines
+	header := m.renderHeader() + "\n\n"
+	headerLines := 2
 
-	// Title + tabs
-	b.WriteString(m.renderHeader())
-	b.WriteString("\n\n")
+	// Footer: blank line + help text + trailing newline = 3 lines
+	var footer string
+	switch m.activeTab {
+	case tabCells:
+		footer = m.cells.Footer()
+	case tabProjects:
+		footer = m.projects.Footer()
+	case tabConfig:
+		footer = m.configTab.Footer()
+	}
+	footer = "\n" + footer + "\n"
+	footerLines := 3
 
-	// Create overlay takes over the content area
+	// Content area height
+	contentHeight := m.height - headerLines - footerLines
+	if contentHeight < 1 {
+		contentHeight = 1
+	}
+
+	// Build content
+	var content string
 	if m.creating != nil {
-		b.WriteString(m.creating.View(m.width, m.height))
-		b.WriteString("\n")
-		return b.String()
+		content = m.creating.View(m.width, m.height)
+	} else if m.creatingHL {
+		content = fmt.Sprintf("  Headless cell name: %s█\n", m.headlessInput)
+		content += "\n  " + helpStyle.Render("enter create  esc cancel") + "\n"
+	} else {
+		switch m.activeTab {
+		case tabCells:
+			content = m.cells.View(m.width)
+		case tabProjects:
+			content = m.projects.View(m.width)
+		case tabConfig:
+			content = m.configTab.View(m.width)
+		}
 	}
 
-	// Headless create prompt
-	if m.creatingHL {
-		b.WriteString(fmt.Sprintf("  Headless cell name: %s█\n", m.headlessInput))
-		b.WriteString("\n  " + helpStyle.Render("enter create  esc cancel") + "\n")
-		return b.String()
+	// Split content into lines and apply scrolling
+	lines := strings.Split(content, "\n")
+	// Remove trailing empty line from split (content usually ends with \n)
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
 	}
 
-	// Active tab content
+	// Determine which line the cursor is on for scroll-follow
+	cursorLine := m.cursorContentLine()
+
+	// Calculate scroll offset to keep cursor visible
+	if cursorLine >= 0 {
+		if cursorLine < m.scrollOffset {
+			m.scrollOffset = cursorLine
+		}
+		if cursorLine >= m.scrollOffset+contentHeight {
+			m.scrollOffset = cursorLine - contentHeight + 1
+		}
+	}
+	// Clamp
+	maxOffset := len(lines) - contentHeight
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if m.scrollOffset > maxOffset {
+		m.scrollOffset = maxOffset
+	}
+	if m.scrollOffset < 0 {
+		m.scrollOffset = 0
+	}
+
+	// Slice visible lines
+	end := m.scrollOffset + contentHeight
+	if end > len(lines) {
+		end = len(lines)
+	}
+	visible := lines[m.scrollOffset:end]
+
+	// Pad to fill content area so footer stays at bottom
+	for len(visible) < contentHeight {
+		visible = append(visible, "")
+	}
+
+	return header + strings.Join(visible, "\n") + "\n" + footer
+}
+
+// cursorContentLine returns the content line index the cursor is on, or -1.
+func (m Model) cursorContentLine() int {
 	switch m.activeTab {
 	case tabCells:
-		b.WriteString(m.cells.View(m.width))
+		return m.cells.cursor
 	case tabProjects:
-		b.WriteString(m.projects.View(m.width))
-	case tabConfig:
-		b.WriteString(m.configTab.View(m.width))
+		// +2 for the table header and separator lines
+		return m.projects.cursor + 2
+	default:
+		return -1
 	}
-
-	// Footer
-	b.WriteString("\n")
-	switch m.activeTab {
-	case tabCells:
-		b.WriteString(m.cells.Footer())
-	case tabProjects:
-		b.WriteString(m.projects.Footer())
-	case tabConfig:
-		b.WriteString(m.configTab.Footer())
-	}
-	b.WriteString("\n")
-
-	return b.String()
 }
 
 func (m Model) renderHeader() string {
@@ -323,6 +381,8 @@ type dashKeyMap struct {
 	Quit     key.Binding
 	Tab      key.Binding
 	ShiftTab key.Binding
+	NextTab  key.Binding
+	PrevTab  key.Binding
 	Create   key.Binding
 	Headless key.Binding
 }
@@ -331,6 +391,8 @@ var dashKeys = dashKeyMap{
 	Quit:     key.NewBinding(key.WithKeys("q", "ctrl+c")),
 	Tab:      key.NewBinding(key.WithKeys("tab")),
 	ShiftTab: key.NewBinding(key.WithKeys("shift+tab")),
+	NextTab:  key.NewBinding(key.WithKeys("l")),
+	PrevTab:  key.NewBinding(key.WithKeys("h")),
 	Create:   key.NewBinding(key.WithKeys("c")),
-	Headless: key.NewBinding(key.WithKeys("h")),
+	Headless: key.NewBinding(key.WithKeys("H")),
 }
