@@ -48,6 +48,7 @@ type CreateResult struct {
 // On failure at any step, everything created so far is rolled back.
 func (s *Service) Create(ctx context.Context, opts CreateOpts) (*CreateResult, error) {
 	cellName := opts.Project + "-" + opts.Name
+	slog.Info("creating cell", "name", cellName, "project", opts.Project, "repo", opts.RepoPath)
 
 	// Check cell doesn't already exist.
 	existing, err := s.CellRepo.GetByName(ctx, cellName)
@@ -68,10 +69,12 @@ func (s *Service) Create(ctx context.Context, opts CreateOpts) (*CreateResult, e
 	}
 
 	// Clone the repo.
+	slog.Info("cloning repo", "cell", cellName, "from", opts.RepoPath)
 	clonePath, err := s.CloneMgr.Clone(ctx, opts.RepoPath, opts.Project, opts.Name)
 	if err != nil {
 		return nil, fmt.Errorf("cloning repo: %w", err)
 	}
+	slog.Info("clone complete", "cell", cellName, "path", clonePath)
 
 	// From here on, rollback clone on failure.
 	rollbackClone := func() {
@@ -89,6 +92,7 @@ func (s *Service) Create(ctx context.Context, opts CreateOpts) (*CreateResult, e
 			rollbackClone()
 			return nil, fmt.Errorf("allocating ports: %w", err)
 		}
+		slog.Info("ports allocated", "cell", cellName, "ports", allocatedPorts)
 	}
 
 	// Build environment variables.
@@ -116,11 +120,15 @@ func (s *Service) Create(ctx context.Context, opts CreateOpts) (*CreateResult, e
 	// Run hooks if any.
 	var hookLog string
 	if len(projectCfg.Hooks) > 0 {
+		slog.Info("running hooks", "cell", cellName, "count", len(projectCfg.Hooks))
 		runner := hooks.NewRunner()
 		result := runner.Run(ctx, clonePath, projectCfg.Hooks, envVars)
 		hookLog = fmt.Sprintf("hooks: %d/%d ran", result.Ran, result.Total)
 		if result.Failed != nil {
 			hookLog += fmt.Sprintf(", failed: %s", result.Failed.Error())
+			slog.Warn("hook failed", "cell", cellName, "hook", result.Failed.Index, "error", result.Failed.Error())
+		} else {
+			slog.Info("hooks complete", "cell", cellName, "ran", result.Ran, "total", result.Total)
 		}
 	}
 
@@ -160,6 +168,8 @@ func (s *Service) Create(ctx context.Context, opts CreateOpts) (*CreateResult, e
 		return nil, fmt.Errorf("saving cell to database: %w", err)
 	}
 
+	slog.Info("cell created", "name", cellName, "path", clonePath)
+
 	return &CreateResult{
 		CellName:  cellName,
 		ClonePath: clonePath,
@@ -171,6 +181,7 @@ func (s *Service) Create(ctx context.Context, opts CreateOpts) (*CreateResult, e
 
 // Kill tears down a cell: tmux session, clone directory, DB record.
 func (s *Service) Kill(ctx context.Context, cellName string) error {
+	slog.Info("killing cell", "name", cellName)
 	cell, err := s.CellRepo.GetByName(ctx, cellName)
 	if err != nil {
 		return fmt.Errorf("looking up cell: %w", err)
@@ -196,11 +207,13 @@ func (s *Service) Kill(ctx context.Context, cellName string) error {
 		return fmt.Errorf("deleting cell record: %w", err)
 	}
 
+	slog.Info("cell killed", "name", cellName)
 	return nil
 }
 
 // CreateHeadless provisions a headless cell: tmux session + DB record, no clone.
 func (s *Service) CreateHeadless(ctx context.Context, name string) (*CreateResult, error) {
+	slog.Info("creating headless cell", "name", name)
 	// Check cell doesn't already exist.
 	existing, err := s.CellRepo.GetByName(ctx, name)
 	if err != nil {

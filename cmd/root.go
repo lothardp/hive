@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+
 	"path/filepath"
 
 	"github.com/lothardp/hive/internal/clone"
@@ -71,6 +72,7 @@ var rootCmd = &cobra.Command{
 
 		// Load global config
 		app.Config = config.LoadGlobalOrDefault(app.HiveDir)
+		slog.Info("config loaded", "cells_dir", app.Config.CellsDir, "project_dirs", app.Config.ProjectDirs)
 
 		// Init managers
 		cellsDir := app.Config.ResolveCellsDir()

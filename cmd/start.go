@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/lothardp/hive/internal/shell"
@@ -29,6 +30,7 @@ var startCmd = &cobra.Command{
 
 		if !exists {
 			// Create tmux session running `hive dashboard`
+			slog.Info("creating dashboard session", "binary", hiveBin)
 			home, _ := os.UserHomeDir()
 			res, err := shell.Run(ctx, "tmux", "new-session", "-d", "-s", "hive", "-c", home, hiveBin, "dashboard")
 			if err != nil {
@@ -40,6 +42,7 @@ var startCmd = &cobra.Command{
 		}
 
 		// Attach or switch to the session
+		slog.Info("joining dashboard session")
 		return app.TmuxMgr.JoinSession("hive")
 	},
 }
