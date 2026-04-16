@@ -7,7 +7,10 @@ Hive is a TUI-first CLI tool for spawning isolated, parallel development environ
 ```
 hive install               # One-time machine setup (config, dirs, tmux.conf)
 hive start                 # Launch the dashboard (or attach if already running)
+hive switch                # Fuzzy-find and switch to a cell (also <prefix> . in tmux)
+hive health                # Show cell consistency across DB, disk, and tmux
 hive notify <msg>          # Send a notification from inside a cell
+hive notify --from-claude  # Read Claude Code hook JSON from stdin
 hive logs [-f]             # Tail the Hive log file
 ```
 
@@ -43,11 +46,13 @@ hive/
 │   ├── start.go                   # hive start — launch/attach to dashboard tmux session
 │   ├── install.go                 # hive install — one-time machine bootstrap
 │   ├── dashboard.go               # hive dashboard — run the Bubble Tea TUI
-│   ├── notify.go                  # hive notify — send notification from inside a cell
+│   ├── notify.go                  # hive notify — send notification (supports --from-claude)
+│   ├── switch.go                  # hive switch — fuzzy cell finder TUI
+│   ├── health.go                  # hive health — cell consistency checker
 │   └── logs.go                    # hive logs — tail ~/.hive/hive.log
 ├── internal/
 │   ├── cell/service.go            # Cell lifecycle: Create, Kill, CreateHeadless, List
-│   ├── clone/clone.go             # Git clone create/remove (replaces worktree)
+│   ├── clone/clone.go             # Git clone create/remove, copies source remotes
 │   ├── config/config.go           # GlobalConfig + ProjectConfig loaders, project discovery
 │   ├── envars/envars.go           # Build env var map from ports + static env
 │   ├── hooks/hooks.go             # Setup hook runner (abort-on-first-failure)
@@ -57,16 +62,18 @@ hive/
 │   ├── state/
 │   │   ├── db.go                  # SQLite Open(), schema, migrations
 │   │   ├── models.go              # Cell, Notification structs; CellStatus, CellType enums
-│   │   ├── repo.go                # CellRepository CRUD
+│   │   ├── cell_repo.go           # CellRepository CRUD
 │   │   └── notification_repo.go   # NotificationRepository CRUD
 │   ├── tmux/tmux.go               # Tmux session create/attach/kill/list
 │   ├── shell/exec.go              # os/exec helpers: Run(), RunInDir(), RunInDirWithEnv()
 │   └── tui/                       # Bubble Tea TUI (multi-tab dashboard)
-│       ├── dashboard.go           # Root model: tab switching, global keybinds, overlays
+│       ├── dashboard.go           # Root model: tab switching, global keybinds, scrollable viewport
 │       ├── cells.go               # Cells tab: list, navigate, kill
 │       ├── projects.go            # Projects tab: list, edit per-project config
 │       ├── configtab.go           # Config tab: show/edit global config
+│       ├── notifications.go       # Notifs tab: browse, mark read, jump to pane, clean up
 │       ├── create.go              # Create flow: project picker → name input → clone → navigate
+│       ├── switcher.go            # Standalone fuzzy cell finder (used by hive switch)
 │       └── styles.go              # Shared lipgloss styles
 ```
 
@@ -139,8 +146,10 @@ Each command is a file in `cmd/` with a package-level `*cobra.Command` var and a
 
 - The dashboard is a tmux session named `hive` running the TUI
 - Navigation uses `tmux switch-client` — the dashboard keeps running
-- From any cell, `<leader>+h` switches back to the dashboard
+- From any cell, `<prefix> h` switches back to the dashboard
+- `<prefix> .` opens the fuzzy cell switcher in a tmux popup
 - `hive start` handles attach vs switch-client based on `$TMUX`
+- Clones copy remotes from the source repo (so `origin` points to GitHub, not the local path)
 
 ### Shell Execution
 
@@ -154,7 +163,7 @@ Each command is a file in `cmd/` with a package-level `*cobra.Command` var and a
 All cell lifecycle logic is in one package:
 - `Create(ctx, CreateOpts)` — clone + ports + tmux + hooks + layout + DB
 - `Kill(ctx, cellName)` — tmux kill + rm clone + DB delete
-- `CreateHeadless(ctx, name)` — tmux session + DB
+- `CreateHeadless(ctx, HeadlessOpts)` — tmux session + DB (supports custom dir/project)
 - `List(ctx)` — all cells from DB
 
 ### Setup Hooks
