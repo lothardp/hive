@@ -348,6 +348,20 @@ func switchToSession(name string) tea.Cmd {
 	}
 }
 
+func switchToPane(sessionName, paneID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		if paneID != "" {
+			res, err := shell.Run(ctx, "tmux", "switch-client", "-t", paneID)
+			if err == nil && res.ExitCode == 0 {
+				return cellSwitched{}
+			}
+		}
+		_, _ = shell.Run(ctx, "tmux", "switch-client", "-t", sessionName)
+		return cellSwitched{}
+	}
+}
+
 func clearAfter(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(time.Time) tea.Msg { return clearMsg{} })
 }

@@ -30,11 +30,12 @@ type Cell struct {
 }
 
 type Notification struct {
-	ID        int64
-	CellName  string
-	Title     string
-	Message   string
-	Details   string
-	Read      bool
-	CreatedAt time.Time
+	ID         int64
+	CellName   string
+	Title      string
+	Message    string
+	Details    string
+	Read       bool
+	SourcePane string // tmux pane ID, e.g. "%91"
+	CreatedAt  time.Time
 }

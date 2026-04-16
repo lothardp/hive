@@ -19,9 +19,10 @@ const (
 	tabCells    = 0
 	tabProjects = 1
 	tabConfig   = 2
+	tabNotifs   = 3
 )
 
-var tabNames = []string{"Cells", "Projects", "Config"}
+var tabNames = []string{"Cells", "Projects", "Config", "Notifs"}
 
 // Model is the root Bubble Tea model for the dashboard.
 type Model struct {
@@ -29,6 +30,7 @@ type Model struct {
 	cells     CellsModel
 	projects  ProjectsModel
 	configTab ConfigModel
+	notifs    NotifsModel
 
 	// Create flow overlay
 	creating      *CreateModel
@@ -79,6 +81,7 @@ func NewModel(
 		cells:       NewCellsModel(svc, notifRepo, tmuxMgr),
 		projects:    NewProjectsModel(hiveDir, editor),
 		configTab:   NewConfigModel(hiveDir, editor),
+		notifs:      NewNotifsModel(notifRepo, tmuxMgr),
 		cellService: svc,
 		globalCfg:   globalCfg,
 		hiveDir:     hiveDir,
@@ -91,6 +94,7 @@ func (m Model) Init() tea.Cmd {
 		m.cells.LoadCells(),
 		m.projects.LoadProjects(m.globalCfg),
 		m.configTab.LoadConfig(),
+		m.notifs.LoadNotifs(),
 	)
 }
 
@@ -187,6 +191,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.globalCfg = config.LoadGlobalOrDefault(m.hiveDir)
 		}
 		return m, cmd
+	case notifsLoaded, notifMarked, notifMarkFailed, notifsAllMarked, notifsCleaned, notifsCleanFailed:
+		m.notifs, cmd = m.notifs.Update(msg)
+		return m, cmd
 	}
 
 	// Key events go to the active tab.
@@ -197,6 +204,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.projects, cmd = m.projects.Update(msg)
 	case tabConfig:
 		m.configTab, cmd = m.configTab.Update(msg)
+	case tabNotifs:
+		m.notifs, cmd = m.notifs.Update(msg)
 	}
 
 	return m, cmd
@@ -431,6 +440,8 @@ func (m Model) View() string {
 		footer = m.projects.Footer()
 	case tabConfig:
 		footer = m.configTab.Footer()
+	case tabNotifs:
+		footer = m.notifs.Footer()
 	}
 	footer = "\n" + footer + "\n"
 	footerLines := 3
@@ -458,6 +469,8 @@ func (m Model) View() string {
 			content = m.projects.View(m.width)
 		case tabConfig:
 			content = m.configTab.View(m.width)
+		case tabNotifs:
+			content = m.notifs.View(m.width)
 		}
 	}
 
@@ -515,6 +528,8 @@ func (m Model) cursorContentLine() int {
 	case tabProjects:
 		// +2 for the table header and separator lines
 		return m.projects.cursor + 2
+	case tabNotifs:
+		return m.notifs.cursorLine()
 	default:
 		return -1
 	}
@@ -535,7 +550,8 @@ func (m Model) renderHeader() string {
 	tabBar := strings.Join(tabs, "  ")
 
 	// Put title on left, tabs on right
-	gap := m.width - len("Hive Dashboard") - len("Cells  Projects  Config") - 6
+	rawTabText := strings.Join(tabNames, "  ")
+	gap := m.width - len("Hive Dashboard") - len(rawTabText) - 4
 	if gap < 2 {
 		gap = 2
 	}

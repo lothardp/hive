@@ -46,5 +46,13 @@ func Open(path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("creating schema: %w", err)
 	}
 
+	// Migrations
+	migrations := []string{
+		`ALTER TABLE notifications ADD COLUMN source_pane TEXT NOT NULL DEFAULT ''`,
+	}
+	for _, m := range migrations {
+		_, _ = db.Exec(m)
+	}
+
 	return db, nil
 }

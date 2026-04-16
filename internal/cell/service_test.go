@@ -174,7 +174,7 @@ func TestCreateHeadless(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
 
-	result, err := svc.CreateHeadless(ctx, "scratch")
+	result, err := svc.CreateHeadless(ctx, HeadlessOpts{Name: "scratch"})
 	if err != nil {
 		t.Fatalf("CreateHeadless: %v", err)
 	}
@@ -246,7 +246,7 @@ func TestList(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = svc.Kill(ctx, "proj-one") })
 
-	_, err = svc.CreateHeadless(ctx, "two")
+	_, err = svc.CreateHeadless(ctx, HeadlessOpts{Name: "two"})
 	if err != nil {
 		t.Fatalf("CreateHeadless two: %v", err)
 	}
