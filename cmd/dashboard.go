@@ -8,6 +8,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var dashboardTab string
+
 var dashboardCmd = &cobra.Command{
 	Use:   "dashboard",
 	Short: "Interactive TUI overview of all cells",
@@ -23,6 +25,10 @@ var dashboardCmd = &cobra.Command{
 			app.DB,
 		)
 
+		if dashboardTab != "" {
+			m.SetInitialTab(dashboardTab)
+		}
+
 		p := tea.NewProgram(m, tea.WithAltScreen())
 		_, err := p.Run()
 		if err != nil {
@@ -34,5 +40,6 @@ var dashboardCmd = &cobra.Command{
 }
 
 func init() {
+	dashboardCmd.Flags().StringVar(&dashboardTab, "tab", "", "Initial tab to show (cells, projects, config, notifs)")
 	rootCmd.AddCommand(dashboardCmd)
 }

@@ -88,6 +88,20 @@ func NewModel(
 	}
 }
 
+// SetInitialTab sets the active tab by name before Init is called.
+func (m *Model) SetInitialTab(name string) {
+	switch strings.ToLower(name) {
+	case "cells":
+		m.activeTab = tabCells
+	case "projects":
+		m.activeTab = tabProjects
+	case "config":
+		m.activeTab = tabConfig
+	case "notifs", "notifications":
+		m.activeTab = tabNotifs
+	}
+}
+
 // Init loads initial data.
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
