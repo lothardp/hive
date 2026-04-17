@@ -144,6 +144,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateOpenProject(msg)
 	}
 
+	// While the projects tab is in search mode, route keys directly so they
+	// don't trigger global bindings (q, h/l, c, H, o, tab, etc.).
+	if m.activeTab == tabProjects && m.projects.Searching() {
+		if _, ok := msg.(tea.KeyMsg); ok {
+			var cmd tea.Cmd
+			m.projects, cmd = m.projects.Update(msg)
+			return m, cmd
+		}
+	}
+
 	// Handle tab-level key events first
 	if msg, ok := msg.(tea.KeyMsg); ok {
 		switch {
@@ -540,8 +550,7 @@ func (m Model) cursorContentLine() int {
 	case tabCells:
 		return m.cells.cursor
 	case tabProjects:
-		// +2 for the table header and separator lines
-		return m.projects.cursor + 2
+		return m.projects.CursorLine()
 	case tabNotifs:
 		return m.notifs.cursorLine()
 	default:

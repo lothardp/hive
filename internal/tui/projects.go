@@ -14,11 +14,14 @@ import (
 
 // ProjectsModel manages the projects tab.
 type ProjectsModel struct {
-	projects []config.DiscoveredProject
-	cursor   int
-	hiveDir  string
-	editor   string
-	message  string
+	projects  []config.DiscoveredProject
+	filtered  []config.DiscoveredProject
+	cursor    int
+	filter    string
+	searching bool
+	hiveDir   string
+	editor    string
+	message   string
 }
 
 func NewProjectsModel(hiveDir, editor string) ProjectsModel {
@@ -26,6 +29,20 @@ func NewProjectsModel(hiveDir, editor string) ProjectsModel {
 		hiveDir: hiveDir,
 		editor:  editor,
 	}
+}
+
+// Searching reports whether the tab is in filter-input mode.
+func (m ProjectsModel) Searching() bool {
+	return m.searching
+}
+
+// CursorLine returns the content line index the selected row is rendered at.
+func (m ProjectsModel) CursorLine() int {
+	headerLines := 2
+	if m.searching || m.filter != "" {
+		headerLines += 2
+	}
+	return m.cursor + headerLines
 }
 
 // Messages
@@ -49,9 +66,7 @@ func (m ProjectsModel) Update(msg tea.Msg) (ProjectsModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case projectsLoaded:
 		m.projects = msg.projects
-		if m.cursor >= len(m.projects) {
-			m.cursor = max(len(m.projects)-1, 0)
-		}
+		m.applyFilter()
 		return m, nil
 
 	case editorFinished:
@@ -69,7 +84,57 @@ func (m ProjectsModel) Update(msg tea.Msg) (ProjectsModel, tea.Cmd) {
 }
 
 func (m ProjectsModel) updateKeys(msg tea.KeyMsg) (ProjectsModel, tea.Cmd) {
+	if m.searching {
+		switch msg.Type {
+		case tea.KeyEscape:
+			m.searching = false
+			m.filter = ""
+			m.applyFilter()
+			return m, nil
+
+		case tea.KeyEnter:
+			m.searching = false
+			return m.editCurrent()
+
+		case tea.KeyUp, tea.KeyCtrlP:
+			if m.cursor > 0 {
+				m.cursor--
+			}
+			return m, nil
+
+		case tea.KeyDown, tea.KeyCtrlN:
+			if m.cursor < len(m.filtered)-1 {
+				m.cursor++
+			}
+			return m, nil
+
+		case tea.KeyBackspace:
+			if len(m.filter) > 0 {
+				m.filter = m.filter[:len(m.filter)-1]
+				m.applyFilter()
+			}
+			return m, nil
+
+		case tea.KeyRunes:
+			m.filter += string(msg.Runes)
+			m.applyFilter()
+			return m, nil
+		}
+		return m, nil
+	}
+
 	switch {
+	case key.Matches(msg, projKeys.Search):
+		m.searching = true
+		return m, nil
+
+	case key.Matches(msg, projKeys.ClearFilter):
+		if m.filter != "" {
+			m.filter = ""
+			m.applyFilter()
+		}
+		return m, nil
+
 	case key.Matches(msg, projKeys.Up):
 		if m.cursor > 0 {
 			m.cursor--
@@ -77,33 +142,52 @@ func (m ProjectsModel) updateKeys(msg tea.KeyMsg) (ProjectsModel, tea.Cmd) {
 		return m, nil
 
 	case key.Matches(msg, projKeys.Down):
-		if m.cursor < len(m.projects)-1 {
+		if m.cursor < len(m.filtered)-1 {
 			m.cursor++
 		}
 		return m, nil
 
 	case key.Matches(msg, projKeys.Edit):
-		if len(m.projects) == 0 {
-			return m, nil
-		}
-		proj := m.projects[m.cursor]
-		cfgPath := filepath.Join(m.hiveDir, "config", proj.Name+".yml")
-
-		// Create default config if it doesn't exist
-		if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
-			defaultCfg := &config.ProjectConfig{
-				RepoPath: proj.Path,
-			}
-			_ = config.WriteDefaultProject(m.hiveDir, proj.Name, defaultCfg)
-		}
-
-		editor := m.editor
-		c := exec.Command(editor, cfgPath)
-		return m, tea.ExecProcess(c, func(err error) tea.Msg {
-			return editorFinished{err: err}
-		})
+		return m.editCurrent()
 	}
 	return m, nil
+}
+
+func (m ProjectsModel) editCurrent() (ProjectsModel, tea.Cmd) {
+	if len(m.filtered) == 0 {
+		return m, nil
+	}
+	proj := m.filtered[m.cursor]
+	cfgPath := filepath.Join(m.hiveDir, "config", proj.Name+".yml")
+
+	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
+		defaultCfg := &config.ProjectConfig{
+			RepoPath: proj.Path,
+		}
+		_ = config.WriteDefaultProject(m.hiveDir, proj.Name, defaultCfg)
+	}
+
+	c := exec.Command(m.editor, cfgPath)
+	return m, tea.ExecProcess(c, func(err error) tea.Msg {
+		return editorFinished{err: err}
+	})
+}
+
+func (m *ProjectsModel) applyFilter() {
+	if m.filter == "" {
+		m.filtered = m.projects
+	} else {
+		f := strings.ToLower(m.filter)
+		m.filtered = nil
+		for _, p := range m.projects {
+			if strings.Contains(strings.ToLower(p.Name), f) {
+				m.filtered = append(m.filtered, p)
+			}
+		}
+	}
+	if m.cursor >= len(m.filtered) {
+		m.cursor = max(len(m.filtered)-1, 0)
+	}
 }
 
 // View renders the projects tab.
@@ -115,11 +199,24 @@ func (m ProjectsModel) View(width int) string {
 		return b.String()
 	}
 
+	if m.searching || m.filter != "" {
+		cursor := ""
+		if m.searching {
+			cursor = "█"
+		}
+		b.WriteString(fmt.Sprintf("  Filter: %s%s\n\n", m.filter, cursor))
+	}
+
 	// Header
 	b.WriteString(fmt.Sprintf("  %-20s %-45s %s\n", "Project", "Path", "Config"))
 	b.WriteString(fmt.Sprintf("  %s\n", strings.Repeat("─", 75)))
 
-	for i, p := range m.projects {
+	if len(m.filtered) == 0 {
+		b.WriteString("  " + dimStyle.Render("No matching projects.") + "\n")
+		return b.String()
+	}
+
+	for i, p := range m.filtered {
 		selected := i == m.cursor
 
 		// Check if project config exists
@@ -150,22 +247,32 @@ func (m ProjectsModel) View(width int) string {
 
 // Footer returns help text for the projects tab.
 func (m ProjectsModel) Footer() string {
+	if m.searching {
+		return helpStyle.Render("type to filter  enter edit  esc clear")
+	}
 	if m.message != "" {
 		return m.message
 	}
-	return helpStyle.Render("enter edit config  q quit")
+	if m.filter != "" {
+		return helpStyle.Render("enter edit  / refine  esc clear filter  q quit")
+	}
+	return helpStyle.Render("enter edit  / search  q quit")
 }
 
 // Key bindings
 
 type projKeyMap struct {
-	Up   key.Binding
-	Down key.Binding
-	Edit key.Binding
+	Up          key.Binding
+	Down        key.Binding
+	Edit        key.Binding
+	Search      key.Binding
+	ClearFilter key.Binding
 }
 
 var projKeys = projKeyMap{
-	Up:   key.NewBinding(key.WithKeys("up", "k")),
-	Down: key.NewBinding(key.WithKeys("down", "j")),
-	Edit: key.NewBinding(key.WithKeys("enter", "e")),
+	Up:          key.NewBinding(key.WithKeys("up", "k", "ctrl+p")),
+	Down:        key.NewBinding(key.WithKeys("down", "j", "ctrl+n")),
+	Edit:        key.NewBinding(key.WithKeys("enter", "e")),
+	Search:      key.NewBinding(key.WithKeys("/")),
+	ClearFilter: key.NewBinding(key.WithKeys("esc")),
 }
