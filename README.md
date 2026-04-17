@@ -194,4 +194,4 @@ After `hive install`, source `~/.hive/tmux.conf` in your `~/.tmux.conf`:
 
 ## License
 
-TBD
+[MIT](LICENSE)
