@@ -199,7 +199,16 @@ func (m NotifsModel) updateNormal(msg tea.KeyMsg) (NotifsModel, tea.Cmd) {
 
 	case key.Matches(msg, notifKeys.Enter):
 		if g := m.selectedGroup(); g != nil {
-			return m, switchToPane(g.cellName, g.latest.SourcePane)
+			cellName := g.cellName
+			paneID := g.latest.SourcePane
+			return m, tea.Batch(
+				func() tea.Msg {
+					ctx := context.Background()
+					m.notifRepo.MarkReadByCell(ctx, cellName)
+					return notifMarked{cellName}
+				},
+				switchToPane(cellName, paneID),
+			)
 		}
 		return m, nil
 

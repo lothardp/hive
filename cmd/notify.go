@@ -64,7 +64,7 @@ var notifyCmd = &cobra.Command{
 			return fmt.Errorf("creating notification: %w", err)
 		}
 
-		if err := sendSystemNotification(ctx, cellName, title, message); err != nil {
+		if err := sendSystemNotification(ctx, cellName, message); err != nil {
 			slog.Warn("system notification failed", "error", err)
 		}
 
@@ -132,11 +132,8 @@ func parseClaudeHookInput() (message, title, details string, err error) {
 	return message, title, details, nil
 }
 
-func sendSystemNotification(ctx context.Context, cellName, title, message string) error {
+func sendSystemNotification(ctx context.Context, cellName, message string) error {
 	bannerTitle := fmt.Sprintf("Hive: %s", cellName)
-	if title != "" {
-		bannerTitle = fmt.Sprintf("Hive: %s", title)
-	}
 	script := fmt.Sprintf(`display notification %q with title %q`, message, bannerTitle)
 	_, err := shell.Run(ctx, "osascript", "-e", script)
 	return err
