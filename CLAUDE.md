@@ -7,7 +7,8 @@ Hive is a TUI-first CLI tool for spawning isolated, parallel development environ
 ```
 hive install               # One-time machine setup (config, dirs, tmux.conf)
 hive start                 # Launch the dashboard (or attach if already running)
-hive switch                # Fuzzy-find and switch to a cell (also <prefix> . in tmux)
+hive switch                # Fuzzy-find and switch to a cell (also <prefix> f in tmux)
+hive notifications         # Ephemeral notifications picker (also <prefix> n in tmux)
 hive health                # Show cell consistency across DB, disk, and tmux
 hive notify <msg>          # Send a notification from inside a cell
 hive notify --from-claude  # Read Claude Code hook JSON from stdin
@@ -20,7 +21,7 @@ Everything else (create cells, kill cells, navigate, configure projects) happens
 
 ### Core Concepts
 
-- **Dashboard**: The single "queen" — a dedicated tmux session (`hive`) running the TUI, rooted in `~`. Always the first session created, always accessible via `<leader>+h` from any cell.
+- **Dashboard**: The single "queen" — a dedicated tmux session (`hive`) running the TUI, rooted in `~`. Always the first session created, always accessible via `<leader>+.` from any cell.
 - **Cell**: An isolated dev environment = git clone + tmux session + DB record. Two types: `normal` (has a clone) and `headless` (tmux session only, no clone).
 - **Cell Naming**: Normal cells are prefixed with the project name: `<project>-<name>` (e.g., `myapp-work`). Headless cells use the bare name.
 - **Project Discovery**: Hive scans directories listed in `config.yaml` → `project_dirs` one level deep for git repos. No registration step needed.
@@ -45,8 +46,9 @@ hive/
 │   ├── root.go                    # App struct, PersistentPreRunE for DB/config init
 │   ├── start.go                   # hive start — launch/attach to dashboard tmux session
 │   ├── install.go                 # hive install — one-time machine bootstrap
-│   ├── dashboard.go               # hive dashboard — run the Bubble Tea TUI
+│   ├── dashboard.go               # hive dashboard — run the Bubble Tea TUI (--tab for initial tab)
 │   ├── notify.go                  # hive notify — send notification (supports --from-claude)
+│   ├── notifications.go           # hive notifications — standalone notifs picker TUI
 │   ├── switch.go                  # hive switch — fuzzy cell finder TUI
 │   ├── health.go                  # hive health — cell consistency checker
 │   └── logs.go                    # hive logs — tail ~/.hive/hive.log
@@ -69,9 +71,10 @@ hive/
 │   └── tui/                       # Bubble Tea TUI (multi-tab dashboard)
 │       ├── dashboard.go           # Root model: tab switching, global keybinds, scrollable viewport
 │       ├── cells.go               # Cells tab: list, navigate, kill
-│       ├── projects.go            # Projects tab: list, edit per-project config
+│       ├── projects.go            # Projects tab: list, fuzzy search (/), edit per-project config
 │       ├── configtab.go           # Config tab: show/edit global config
-│       ├── notifications.go       # Notifs tab: browse, mark read, jump to pane, clean up
+│       ├── notifications.go       # Notifs tab: grouped by cell, mark read, jump to pane, clean up
+│       ├── notifpicker.go         # Standalone notifs picker (used by hive notifications)
 │       ├── create.go              # Create flow: project picker → name input → clone → navigate
 │       ├── switcher.go            # Standalone fuzzy cell finder (used by hive switch)
 │       └── styles.go              # Shared lipgloss styles
@@ -146,8 +149,9 @@ Each command is a file in `cmd/` with a package-level `*cobra.Command` var and a
 
 - The dashboard is a tmux session named `hive` running the TUI
 - Navigation uses `tmux switch-client` — the dashboard keeps running
-- From any cell, `<prefix> h` switches back to the dashboard
-- `<prefix> .` opens the fuzzy cell switcher in a tmux popup
+- From any cell, `<prefix> .` switches back to the dashboard
+- `<prefix> f` opens the fuzzy cell switcher in a new tmux window
+- `<prefix> n` opens the ephemeral notifications picker in a new tmux window
 - `hive start` handles attach vs switch-client based on `$TMUX`
 - Clones copy remotes from the source repo (so `origin` points to GitHub, not the local path)
 

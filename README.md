@@ -73,7 +73,7 @@ The dashboard is a Bubble Tea TUI with four tabs:
 
 Shows all active cells grouped by project. Navigate with `j`/`k`, press Enter to switch to a cell's tmux session, `c` to create a new cell, `x` to kill one.
 
-From any cell, press `<prefix> h` to switch back to the dashboard.
+From any cell, press `<prefix> .` to switch back to the dashboard.
 
 | Key | Action |
 |-----|--------|
@@ -90,7 +90,7 @@ From any cell, press `<prefix> h` to switch back to the dashboard.
 
 ### Projects Tab
 
-Lists all discovered projects (git repos found in your `project_dirs`). Press Enter to edit a project's config in your editor.
+Lists all discovered projects (git repos found in your `project_dirs`). Press Enter to edit a project's config in your editor. Press `/` to fuzzy-filter the list by name.
 
 ### Config Tab
 
@@ -98,7 +98,9 @@ Shows the global config. Press `e` to edit it in your editor.
 
 ### Notifs Tab
 
-Browse all notifications with full content. Two sections: Unread at top, Read below. Press Enter to jump to the source cell (and pane), `m` to mark one as read, `M` to mark all, `D` to clean up read notifications.
+Browse notifications grouped by cell (latest per cell shown). Two sections: Unread at top, Read below. Press Enter to jump to the source pane and mark that cell's notifications read, `m` to mark one as read, `M` to mark all, `D` to clean up read notifications.
+
+For a standalone, quit-on-navigate picker outside the dashboard, run `hive notifications` (bound to `<prefix> n`).
 
 ## Configuration
 
@@ -177,6 +179,7 @@ For Claude Code integration, use the `--from-claude` flag in a hook — it reads
 hive install               # One-time machine setup
 hive start                 # Launch/attach to dashboard
 hive switch                # Fuzzy-find and switch to a cell
+hive notifications         # Ephemeral notifications picker (quits after jump)
 hive health                # Show cell consistency across DB, disk, and tmux
 hive notify <msg>          # Send notification from inside a cell
 hive notify --from-claude  # Read Claude Code hook JSON from stdin
@@ -189,8 +192,9 @@ After `hive install`, source `~/.hive/tmux.conf` in your `~/.tmux.conf`:
 
 | Keybinding | Action |
 |------------|--------|
-| `<prefix> h` | Switch to dashboard |
-| `<prefix> .` | Fuzzy cell switcher (popup) |
+| `<prefix> .` | Switch to dashboard |
+| `<prefix> f` | Fuzzy cell switcher (new window) |
+| `<prefix> n` | Notifications picker (new window) |
 
 ## License
 
