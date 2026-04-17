@@ -22,30 +22,37 @@ func NewManager(cellsDir string) *Manager {
 // Returns the absolute path to the clone.
 func (m *Manager) Clone(ctx context.Context, repoPath, project, name string) (string, error) {
 	targetPath := filepath.Join(m.CellsDir, project, name)
+	if err := m.CloneInto(ctx, repoPath, targetPath); err != nil {
+		return "", err
+	}
+	return targetPath, nil
+}
 
+// CloneInto runs `git clone <repoPath> <targetPath>` at an explicit absolute
+// target path. The parent of targetPath is created if missing; targetPath
+// itself must not exist.
+func (m *Manager) CloneInto(ctx context.Context, repoPath, targetPath string) error {
 	if _, err := os.Stat(targetPath); err == nil {
-		return "", fmt.Errorf("clone path already exists: %s", targetPath)
+		return fmt.Errorf("clone path already exists: %s", targetPath)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
-		return "", fmt.Errorf("creating parent directory: %w", err)
+		return fmt.Errorf("creating parent directory: %w", err)
 	}
 
 	res, err := shell.Run(ctx, "git", "clone", repoPath, targetPath)
 	if err != nil {
-		return "", fmt.Errorf("cloning repo: %w", err)
+		return fmt.Errorf("cloning repo: %w", err)
 	}
 	if res.ExitCode != 0 {
-		return "", fmt.Errorf("cloning repo: %s", strings.TrimSpace(res.Stderr))
+		return fmt.Errorf("cloning repo: %s", strings.TrimSpace(res.Stderr))
 	}
 
-	// Copy remotes from the source repo so the clone points at the real
-	// upstream (e.g. GitHub) instead of the local path.
 	if err := copyRemotes(ctx, repoPath, targetPath); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: failed to copy remotes: %v\n", err)
 	}
 
-	return targetPath, nil
+	return nil
 }
 
 // copyRemotes reads all remotes from srcRepo and sets them on dstRepo.
