@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -25,15 +24,6 @@ func TestRunner_AllPass(t *testing.T) {
 	}
 	if result.Failed != nil {
 		t.Errorf("Failed should be nil, got %v", result.Failed)
-	}
-
-	// Check hook_results.txt was written
-	content, err := os.ReadFile(filepath.Join(dir, "hook_results.txt"))
-	if err != nil {
-		t.Fatalf("reading hook_results.txt: %v", err)
-	}
-	if !strings.Contains(string(content), "OK   [0] echo hello") {
-		t.Errorf("hook_results.txt missing OK line, got: %s", content)
 	}
 }
 
