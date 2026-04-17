@@ -12,19 +12,26 @@ import (
 	"github.com/lothardp/hive/internal/tmux"
 )
 
+// cellNotifGroup represents one cell's notifications, collapsed to the latest.
+type cellNotifGroup struct {
+	cellName string
+	latest   state.Notification // most recent notification for this cell
+	count    int                // total notifications in this group
+}
+
 // notifRow is one line in the notifications view.
 type notifRow struct {
-	isHeader     bool
-	headerText   string
-	notification *state.Notification
+	isHeader bool
+	headerText string
+	group    *cellNotifGroup
 }
 
 // NotifsModel manages the notifications tab.
 type NotifsModel struct {
-	unread []state.Notification
-	read   []state.Notification
-	rows   []notifRow
-	cursor int
+	unreadGroups []cellNotifGroup
+	readGroups   []cellNotifGroup
+	rows         []notifRow
+	cursor       int
 
 	// Confirmation state
 	confirming bool
@@ -47,18 +54,38 @@ func NewNotifsModel(notifRepo *state.NotificationRepository, tmuxMgr *tmux.Manag
 // Messages
 
 type notifsLoaded struct {
-	unread []state.Notification
-	read   []state.Notification
+	unreadGroups []cellNotifGroup
+	readGroups   []cellNotifGroup
 }
 
-type notifMarked struct{ id int64 }
+type notifMarked struct{ cellName string }
 type notifMarkFailed struct {
-	id  int64
-	err error
+	cellName string
+	err      error
 }
 type notifsAllMarked struct{ count int }
 type notifsCleaned struct{ count int }
 type notifsCleanFailed struct{ err error }
+
+// groupByCell groups notifications by cell, keeping only the latest per cell.
+// Input must be sorted by created_at DESC (which List already returns).
+func groupByCell(notifs []state.Notification) []cellNotifGroup {
+	seen := make(map[string]int) // cellName → index in result
+	var groups []cellNotifGroup
+	for _, n := range notifs {
+		if idx, ok := seen[n.CellName]; ok {
+			groups[idx].count++
+		} else {
+			seen[n.CellName] = len(groups)
+			groups = append(groups, cellNotifGroup{
+				cellName: n.CellName,
+				latest:   n,
+				count:    1,
+			})
+		}
+	}
+	return groups
+}
 
 func (m NotifsModel) LoadNotifs() tea.Cmd {
 	return func() tea.Msg {
@@ -71,19 +98,32 @@ func (m NotifsModel) LoadNotifs() tea.Cmd {
 				read = append(read, n)
 			}
 		}
-		return notifsLoaded{unread: unread, read: read}
+		return notifsLoaded{
+			unreadGroups: groupByCell(unread),
+			readGroups:   groupByCell(read),
+		}
 	}
 }
 
 func (m *NotifsModel) buildRows() {
 	m.rows = nil
-	m.rows = append(m.rows, notifRow{isHeader: true, headerText: fmt.Sprintf("Unread (%d)", len(m.unread))})
-	for i := range m.unread {
-		m.rows = append(m.rows, notifRow{notification: &m.unread[i]})
+
+	unreadTotal := 0
+	for _, g := range m.unreadGroups {
+		unreadTotal += g.count
 	}
-	m.rows = append(m.rows, notifRow{isHeader: true, headerText: fmt.Sprintf("Read (%d)", len(m.read))})
-	for i := range m.read {
-		m.rows = append(m.rows, notifRow{notification: &m.read[i]})
+	readTotal := 0
+	for _, g := range m.readGroups {
+		readTotal += g.count
+	}
+
+	m.rows = append(m.rows, notifRow{isHeader: true, headerText: fmt.Sprintf("Unread (%d)", unreadTotal)})
+	for i := range m.unreadGroups {
+		m.rows = append(m.rows, notifRow{group: &m.unreadGroups[i]})
+	}
+	m.rows = append(m.rows, notifRow{isHeader: true, headerText: fmt.Sprintf("Read (%d)", readTotal)})
+	for i := range m.readGroups {
+		m.rows = append(m.rows, notifRow{group: &m.readGroups[i]})
 	}
 }
 
@@ -91,8 +131,8 @@ func (m *NotifsModel) buildRows() {
 func (m NotifsModel) Update(msg tea.Msg) (NotifsModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case notifsLoaded:
-		m.unread = msg.unread
-		m.read = msg.read
+		m.unreadGroups = msg.unreadGroups
+		m.readGroups = msg.readGroups
 		m.buildRows()
 		if m.cursor >= len(m.rows) {
 			m.cursor = max(len(m.rows)-1, 0)
@@ -101,7 +141,7 @@ func (m NotifsModel) Update(msg tea.Msg) (NotifsModel, tea.Cmd) {
 		return m, nil
 
 	case notifMarked:
-		m.message = "Marked as read"
+		m.message = fmt.Sprintf("Marked all from %s as read", msg.cellName)
 		return m, tea.Batch(m.LoadNotifs(), clearAfter(3*time.Second))
 
 	case notifMarkFailed:
@@ -158,45 +198,41 @@ func (m NotifsModel) updateNormal(msg tea.KeyMsg) (NotifsModel, tea.Cmd) {
 		return m, nil
 
 	case key.Matches(msg, notifKeys.Enter):
-		if r := m.selectedNotif(); r != nil {
-			return m, switchToPane(r.CellName, r.SourcePane)
+		if g := m.selectedGroup(); g != nil {
+			return m, switchToPane(g.cellName, g.latest.SourcePane)
 		}
 		return m, nil
 
 	case key.Matches(msg, notifKeys.Mark):
-		if r := m.selectedNotif(); r != nil && !r.Read {
-			id := r.ID
+		if g := m.selectedGroup(); g != nil && !g.latest.Read {
+			cellName := g.cellName
 			return m, func() tea.Msg {
 				ctx := context.Background()
-				if err := m.notifRepo.MarkRead(ctx, id); err != nil {
-					return notifMarkFailed{id, err}
+				_, err := m.notifRepo.MarkReadByCell(ctx, cellName)
+				if err != nil {
+					return notifMarkFailed{cellName, err}
 				}
-				return notifMarked{id}
+				return notifMarked{cellName}
 			}
 		}
 		return m, nil
 
 	case key.Matches(msg, notifKeys.MarkAll):
-		if len(m.unread) == 0 {
+		if len(m.unreadGroups) == 0 {
 			return m, nil
 		}
 		return m, func() tea.Msg {
 			ctx := context.Background()
 			total := 0
-			seen := make(map[string]bool)
-			for _, n := range m.unread {
-				if seen[n.CellName] {
-					continue
-				}
-				seen[n.CellName] = true
-				count, _ := m.notifRepo.MarkReadByCell(ctx, n.CellName)
+			for _, g := range m.unreadGroups {
+				count, _ := m.notifRepo.MarkReadByCell(ctx, g.cellName)
 				total += count
 			}
 			return notifsAllMarked{total}
 		}
 
 	case key.Matches(msg, notifKeys.Clean):
-		if len(m.read) == 0 {
+		if len(m.readGroups) == 0 {
 			return m, nil
 		}
 		m.confirming = true
@@ -230,7 +266,7 @@ func (m NotifsModel) updateConfirming(msg tea.KeyMsg) (NotifsModel, tea.Cmd) {
 func (m NotifsModel) View(width int) string {
 	var b strings.Builder
 
-	if len(m.unread) == 0 && len(m.read) == 0 {
+	if len(m.unreadGroups) == 0 && len(m.readGroups) == 0 {
 		b.WriteString("  No notifications.\n")
 		return b.String()
 	}
@@ -246,36 +282,42 @@ func (m NotifsModel) View(width int) string {
 			continue
 		}
 
-		n := r.notification
+		g := r.group
+		n := &g.latest
+		isRead := n.Read
 
 		// Indicator
 		var indicator string
-		if n.Read {
+		if isRead {
 			indicator = dimStyle.Render("○")
 		} else {
 			indicator = statusAlive.Render("●")
 		}
 
-		// Title
-		title := n.Title
-		if title == "" {
-			title = "(no title)"
+		// Cell name with count
+		cellDisplay := g.cellName
+		if g.count > 1 {
+			cellDisplay = fmt.Sprintf("%s (%d)", g.cellName, g.count)
 		}
 
 		// Age
 		age := formatAge(time.Since(n.CreatedAt))
 
-		// Line 1: indicator + title + cell + age
-		line1 := fmt.Sprintf("    %s %-25s %-20s %s", indicator, title, dimStyle.Render(n.CellName), age)
+		// Line 1: indicator + cell name (with count) + age
+		line1 := fmt.Sprintf("    %s %-35s %s", indicator, cellDisplay, age)
 		if selected {
 			line1 = selectedStyle.Render(line1)
-		} else if n.Read {
+		} else if isRead {
 			line1 = dimStyle.Render(line1)
 		}
 		b.WriteString(line1 + "\n")
 
-		// Line 2: message
-		msg := n.Message
+		// Line 2: title + message
+		title := n.Title
+		if title != "" {
+			title += ": "
+		}
+		msg := title + n.Message
 		maxMsgLen := width - 8
 		if maxMsgLen < 20 {
 			maxMsgLen = 60
@@ -284,19 +326,10 @@ func (m NotifsModel) View(width int) string {
 			msg = msg[:maxMsgLen-3] + "..."
 		}
 		line2 := "      " + msg
-		if n.Read {
+		if isRead {
 			line2 = dimStyle.Render(line2)
 		}
 		b.WriteString(line2 + "\n")
-
-		// Line 3: details (optional)
-		if n.Details != "" {
-			details := n.Details
-			if len(details) > maxMsgLen {
-				details = details[:maxMsgLen-3] + "..."
-			}
-			b.WriteString(dimStyle.Render("      "+details) + "\n")
-		}
 	}
 
 	return b.String()
@@ -314,7 +347,7 @@ func (m NotifsModel) Footer() string {
 }
 
 // cursorLine returns the content line index for the cursor, accounting for
-// multi-line rendering (headers=2 lines, notifications=2-3 lines each).
+// multi-line rendering (headers=2 lines, groups=2 lines each).
 func (m NotifsModel) cursorLine() int {
 	line := 0
 	for i, r := range m.rows {
@@ -324,10 +357,7 @@ func (m NotifsModel) cursorLine() int {
 		if r.isHeader {
 			line += 2 // header text + separator
 		} else {
-			line += 2 // title + message
-			if r.notification != nil && r.notification.Details != "" {
-				line++ // details line
-			}
+			line += 2 // cell line + message line
 		}
 	}
 	return line
@@ -339,7 +369,6 @@ func (m *NotifsModel) skipToNotif(dir int) {
 	}
 	if m.cursor < 0 {
 		m.cursor = 0
-		// Skip past first header
 		if len(m.rows) > 1 && m.rows[0].isHeader {
 			m.cursor = 1
 		}
@@ -347,16 +376,13 @@ func (m *NotifsModel) skipToNotif(dir int) {
 	if m.cursor >= len(m.rows) {
 		m.cursor = len(m.rows) - 1
 	}
-	// If we landed on a header and there's nothing else, stay at 0
 	if m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].isHeader {
-		// Try forward
 		for j := m.cursor + 1; j < len(m.rows); j++ {
 			if !m.rows[j].isHeader {
 				m.cursor = j
 				return
 			}
 		}
-		// Try backward
 		for j := m.cursor - 1; j >= 0; j-- {
 			if !m.rows[j].isHeader {
 				m.cursor = j
@@ -366,9 +392,9 @@ func (m *NotifsModel) skipToNotif(dir int) {
 	}
 }
 
-func (m NotifsModel) selectedNotif() *state.Notification {
+func (m NotifsModel) selectedGroup() *cellNotifGroup {
 	if m.cursor >= 0 && m.cursor < len(m.rows) {
-		return m.rows[m.cursor].notification
+		return m.rows[m.cursor].group
 	}
 	return nil
 }
