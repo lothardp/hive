@@ -9,7 +9,6 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/lothardp/hive/internal/state"
-	"github.com/lothardp/hive/internal/tmux"
 )
 
 // cellNotifGroup represents one cell's notifications, collapsed to the latest.
@@ -41,13 +40,11 @@ type NotifsModel struct {
 
 	// Dependencies
 	notifRepo *state.NotificationRepository
-	tmuxMgr   *tmux.Manager
 }
 
-func NewNotifsModel(notifRepo *state.NotificationRepository, tmuxMgr *tmux.Manager) NotifsModel {
+func NewNotifsModel(notifRepo *state.NotificationRepository) NotifsModel {
 	return NotifsModel{
 		notifRepo: notifRepo,
-		tmuxMgr:   tmuxMgr,
 	}
 }
 
@@ -66,6 +63,13 @@ type notifMarkFailed struct {
 type notifsAllMarked struct{ count int }
 type notifsCleaned struct{ count int }
 type notifsCleanFailed struct{ err error }
+
+// NotifSelected is emitted when the user presses Enter on a notification.
+// The parent (dashboard or picker) decides what to do with it.
+type NotifSelected struct {
+	CellName string
+	PaneID   string
+}
 
 // groupByCell groups notifications by cell, keeping only the latest per cell.
 // Input must be sorted by created_at DESC (which List already returns).
@@ -207,7 +211,9 @@ func (m NotifsModel) updateNormal(msg tea.KeyMsg) (NotifsModel, tea.Cmd) {
 					m.notifRepo.MarkReadByCell(ctx, cellName)
 					return notifMarked{cellName}
 				},
-				switchToPane(cellName, paneID),
+				func() tea.Msg {
+					return NotifSelected{CellName: cellName, PaneID: paneID}
+				},
 			)
 		}
 		return m, nil

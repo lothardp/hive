@@ -81,7 +81,7 @@ func NewModel(
 		cells:       NewCellsModel(svc, notifRepo, tmuxMgr),
 		projects:    NewProjectsModel(hiveDir, editor),
 		configTab:   NewConfigModel(hiveDir, editor),
-		notifs:      NewNotifsModel(notifRepo, tmuxMgr),
+		notifs:      NewNotifsModel(notifRepo),
 		cellService: svc,
 		globalCfg:   globalCfg,
 		hiveDir:     hiveDir,
@@ -215,6 +215,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.globalCfg = config.LoadGlobalOrDefault(m.hiveDir)
 		}
 		return m, cmd
+	case NotifSelected:
+		ns := msg.(NotifSelected)
+		return m, switchToPane(ns.CellName, ns.PaneID)
 	case notifsLoaded, notifMarked, notifMarkFailed, notifsAllMarked, notifsCleaned, notifsCleanFailed:
 		m.notifs, cmd = m.notifs.Update(msg)
 		return m, cmd
