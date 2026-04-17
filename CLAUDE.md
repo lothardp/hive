@@ -22,8 +22,9 @@ Everything else (create cells, kill cells, navigate, configure projects) happens
 ### Core Concepts
 
 - **Dashboard**: The single "queen" — a dedicated tmux session (`hive`) running the TUI, rooted in `~`. Always the first session created, always accessible via `<leader>+.` from any cell.
-- **Cell**: An isolated dev environment = git clone + tmux session + DB record. Two types: `normal` (has a clone) and `headless` (tmux session only, no clone).
-- **Cell Naming**: Normal cells are prefixed with the project name: `<project>-<name>` (e.g., `myapp-work`). Headless cells use the bare name.
+- **Cell**: An isolated dev environment = git clone + tmux session + DB record. Three types: `normal` (has a clone), `headless` (tmux session only, no clone), and `multi` (parent dir bundling clones of several projects under one tmux session).
+- **Cell Naming**: Normal cells are prefixed with the project name: `<project>-<name>` (e.g., `myapp-work`). Headless and multi cells use the bare name. Inside a multicell, child clone dirs are named `<project>-<multicell>` (e.g., `api-auth-overhaul`).
+- **Multicell**: A single named workspace that bundles clones of multiple projects under one parent dir in `multicells_dir`, with one shared tmux session. Useful for features that span repos. Stored as a row in `cells` with `Type=multi`; child clones tracked in `multicell_children`.
 - **Project Discovery**: Hive scans directories listed in `config.yaml` → `project_dirs` one level deep for git repos. No registration step needed.
 
 ### Tech Stack
@@ -53,7 +54,7 @@ hive/
 │   ├── health.go                  # hive health — cell consistency checker
 │   └── logs.go                    # hive logs — tail ~/.hive/hive.log
 ├── internal/
-│   ├── cell/service.go            # Cell lifecycle: Create, Kill, CreateHeadless, List
+│   ├── cell/service.go            # Cell lifecycle: Create, Kill, CreateHeadless, CreateMulti, List
 │   ├── clone/clone.go             # Git clone create/remove, copies source remotes
 │   ├── config/config.go           # GlobalConfig + ProjectConfig loaders, project discovery
 │   ├── envars/envars.go           # Build env var map from ports + static env
@@ -63,8 +64,9 @@ hive/
 │   ├── ports/ports.go             # Port allocator (range 3001-9999, checks OS + DB)
 │   ├── state/
 │   │   ├── db.go                  # SQLite Open(), schema, migrations
-│   │   ├── models.go              # Cell, Notification structs; CellStatus, CellType enums
+│   │   ├── models.go              # Cell, MulticellChild, Notification structs; CellStatus, CellType enums
 │   │   ├── cell_repo.go           # CellRepository CRUD
+│   │   ├── multicell_repo.go      # MulticellRepository CRUD (child clone rows)
 │   │   └── notification_repo.go   # NotificationRepository CRUD
 │   ├── tmux/tmux.go               # Tmux session create/attach/kill/list
 │   ├── shell/exec.go              # os/exec helpers: Run(), RunInDir(), RunInDirWithEnv()
@@ -76,18 +78,19 @@ hive/
 │       ├── notifications.go       # Notifs tab: grouped by cell, mark read, jump to pane, clean up
 │       ├── notifpicker.go         # Standalone notifs picker (used by hive notifications)
 │       ├── create.go              # Create flow: project picker → name input → clone → navigate
+│       ├── create_multi.go        # Multicell create flow: multi-picker → name → parent dir + N clones
 │       ├── switcher.go            # Standalone fuzzy cell finder (used by hive switch)
 │       └── styles.go              # Shared lipgloss styles
 ```
 
 ### How It Fits Together
 
-1. `cmd/root.go` defines an `App` struct that holds DB, CellRepository, NotificationRepository, GlobalConfig, CloneManager, and TmuxManager. `PersistentPreRunE` initializes everything; `PersistentPostRunE` closes the DB.
+1. `cmd/root.go` defines an `App` struct that holds DB, CellRepository, MulticellRepository, NotificationRepository, GlobalConfig, CloneManager, TmuxManager, and the resolved `MulticellsDir`. `PersistentPreRunE` initializes everything; `PersistentPostRunE` closes the DB.
 2. `hive start` creates a tmux session named `hive` running `hive dashboard`, then attaches to it.
 3. The dashboard TUI is the primary interface. It uses `internal/cell.Service` for cell lifecycle operations.
-4. `cell.Service` orchestrates: clone repo → allocate ports → create tmux session → run hooks → apply layout → record in DB. Rollback on failure at any step.
+4. `cell.Service` orchestrates: clone repo → allocate ports → build env → run hooks → create tmux session → apply layout → record in DB. Hooks run before tmux session creation via the internal `provisionClone` helper, so hook failures tear down the clone cleanly without a half-configured session. Rollback on failure at any step. For multicells, `CreateMulti` loops `provisionClone` once per selected project under the shared parent dir.
 5. Navigation between cells uses `tmux switch-client` from within the TUI — the dashboard never exits.
-6. State lives in `~/.hive/state.db` (SQLite). Two tables: `cells`, `notifications`.
+6. State lives in `~/.hive/state.db` (SQLite). Three tables: `cells`, `multicell_children` (child clones per multicell, cascade-deleted with the parent row), `notifications`.
 7. Config lives in YAML files: `~/.hive/config.yaml` (global) and `~/.hive/config/{project}.yml` (per-project).
 
 ## Config
@@ -95,12 +98,13 @@ hive/
 ### Global (`~/.hive/config.yaml`)
 
 ```yaml
-project_dirs:          # Directories to scan for git repos (one level deep)
+project_dirs:                    # Directories to scan for git repos (one level deep)
   - ~/side_projects
   - ~/work
-cells_dir: ~/hive/cells  # Where cell clones are stored
-editor: vim              # Editor for config editing from dashboard
-tmux_leader: "C-a"       # Tmux leader key
+cells_dir: ~/hive/cells          # Where cell clones are stored
+multicells_dir: ~/hive/multicells # Where multicell parent dirs are stored
+editor: vim                      # Editor for config editing from dashboard
+tmux_leader: "C-a"               # Tmux leader key
 ```
 
 ### Per-Project (`~/.hive/config/{project}.yml`)
@@ -142,7 +146,7 @@ Each command is a file in `cmd/` with a package-level `*cobra.Command` var and a
 
 - All repo methods take `context.Context` as first arg
 - Cell status: `running`, `stopped`, `error`
-- Cell types: `normal`, `headless`
+- Cell types: `normal`, `headless`, `multi`
 - Timestamps are managed by the repo layer, not callers
 
 ### Tmux Integration
@@ -165,17 +169,21 @@ Each command is a file in `cmd/` with a package-level `*cobra.Command` var and a
 ### Cell Service (`internal/cell/service.go`)
 
 All cell lifecycle logic is in one package:
-- `Create(ctx, CreateOpts)` — clone + ports + tmux + hooks + layout + DB
-- `Kill(ctx, cellName)` — tmux kill + rm clone + DB delete
+- `Create(ctx, CreateOpts)` — clone + ports + hooks + tmux + layout + DB (normal cells)
 - `CreateHeadless(ctx, HeadlessOpts)` — tmux session + DB (supports custom dir/project)
+- `CreateMulti(ctx, MultiOpts)` — parent dir + N provisioned clones (per-project hooks) + shared tmux session + `cells` row (type=multi) + `multicell_children` rows
+- `Kill(ctx, cellName)` — tmux kill + rm clone or multicell dir (based on type) + DB delete (cascade removes child rows)
 - `List(ctx)` — all cells from DB
+- `ListMultiChildren(ctx, multicellName)` — child clones registered under a multicell
+- Internal `provisionClone(ctx, ProvisionOpts)` — shared orphan-cleanup → clone → alloc ports → build env → run hooks, with rollback on failure. Used by both `Create` (once) and `CreateMulti` (once per project).
 
 ### Setup Hooks
 
 - Defined in per-project config (`~/.hive/config/{project}.yml`)
-- Run sequentially in the cell's clone directory
-- Abort on first failure — results written to `hook_results.txt`
-- Hook commands receive the cell's full environment (ports, static env, `HIVE_CELL`)
+- Run sequentially in the cell's clone directory, before the tmux session is created
+- Abort on first failure — the partially-cloned directory is rolled back (no hook_results.txt is written; stderr from the failing hook is surfaced up the error chain)
+- Hook commands receive the cell's full environment (ports, static env, `HIVE_CELL`, `HIVE_REPO_DIR`)
+- For multicells, hooks run once per child project in its own clone dir, with extra env `HIVE_MULTICELL`, `HIVE_MULTICELL_DIR`, and `HIVE_PROJECT`
 
 ### Port Allocation
 

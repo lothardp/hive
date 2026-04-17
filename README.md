@@ -25,6 +25,20 @@ Hive creates **cells** — isolated dev environments that combine:
 
 Each cell is fully independent. No shared `node_modules`, no port conflicts, no stepping on each other's toes. You manage branches inside each clone however you want — Hive doesn't care about git branches.
 
+### Multicells
+
+Some features span multiple repos. A **multicell** bundles clones of several projects under one parent directory and one tmux session:
+
+```
+~/hive/multicells/
+└── auth-overhaul/       # one multicell = one tmux session
+    ├── api-auth-overhaul/     # clone of api
+    ├── web-auth-overhaul/     # clone of web
+    └── mobile-auth-overhaul/  # clone of mobile
+```
+
+Press `C` on the Cells tab to create one — pick several projects, give the multicell a name, and Hive clones them all, runs each project's setup hooks, and drops you into a shared tmux session rooted at the parent dir. Child dir names are suffixed with the multicell name so they stay globally unique.
+
 ## Installation
 
 ### Prerequisites
@@ -81,6 +95,7 @@ From any cell, press `<prefix> .` to switch back to the dashboard.
 | `h`/`l` or `Tab`/`Shift+Tab` | Switch tab |
 | `Enter` | Switch to cell |
 | `c` | Create new cell (project picker → name → clone) |
+| `C` | Create new multicell (multi-project picker → name → clones + shared session) |
 | `o` | Open headless cell in a project directory |
 | `H` | Create bare headless cell (tmux session only, in `~`) |
 | `x` | Kill cell (with confirmation) |
@@ -112,6 +127,7 @@ project_dirs:
   - ~/work
   - ~/repos
 cells_dir: ~/hive/cells
+multicells_dir: ~/hive/multicells
 editor: vim
 tmux_leader: "C-a"
 ```
