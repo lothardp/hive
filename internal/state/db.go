@@ -23,6 +23,19 @@ CREATE TABLE IF NOT EXISTS cells (
 CREATE INDEX IF NOT EXISTS idx_cells_status ON cells(status);
 CREATE INDEX IF NOT EXISTS idx_cells_project ON cells(project);
 
+CREATE TABLE IF NOT EXISTS multicell_children (
+	id              INTEGER PRIMARY KEY AUTOINCREMENT,
+	multicell_name  TEXT NOT NULL,
+	project         TEXT NOT NULL,
+	clone_path      TEXT NOT NULL,
+	source_repo     TEXT NOT NULL,
+	created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	UNIQUE(multicell_name, project),
+	FOREIGN KEY (multicell_name) REFERENCES cells(name) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_mcc_multicell ON multicell_children(multicell_name);
+
 CREATE TABLE IF NOT EXISTS notifications (
 	id         INTEGER PRIMARY KEY AUTOINCREMENT,
 	cell_name  TEXT NOT NULL,

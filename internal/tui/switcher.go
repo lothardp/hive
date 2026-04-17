@@ -126,8 +126,11 @@ func (m SwitcherModel) View() string {
 		// Name with type indicator
 		name := c.Name
 		typeTag := ""
-		if c.Type == state.TypeHeadless {
-			typeTag = " [h]"
+		switch c.Type {
+		case state.TypeHeadless:
+			typeTag = " [headless]"
+		case state.TypeMulti:
+			typeTag = " [multi]"
 		}
 
 		// Status indicator
@@ -141,7 +144,7 @@ func (m SwitcherModel) View() string {
 		// Age
 		age := formatAge(time.Since(c.CreatedAt))
 
-		line := fmt.Sprintf("%s%-30s %-4s %s  %s", prefix, name, typeTag, indicator, age)
+		line := fmt.Sprintf("%s%-30s %-11s %s  %s", prefix, name, typeTag, indicator, age)
 
 		if i == m.cursor {
 			line = selectedStyle.Render(line)

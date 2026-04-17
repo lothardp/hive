@@ -17,15 +17,17 @@ import (
 )
 
 type App struct {
-	DB        *sql.DB
-	CellRepo  *state.CellRepository
-	NotifRepo *state.NotificationRepository
-	Config    *config.GlobalConfig
-	HiveDir   string
-	Verbose   bool
-	LogFile   *os.File
-	CloneMgr  *clone.Manager
-	TmuxMgr   *tmux.Manager
+	DB            *sql.DB
+	CellRepo      *state.CellRepository
+	MulticellRepo *state.MulticellRepository
+	NotifRepo     *state.NotificationRepository
+	Config        *config.GlobalConfig
+	HiveDir       string
+	Verbose       bool
+	LogFile       *os.File
+	CloneMgr      *clone.Manager
+	TmuxMgr       *tmux.Manager
+	MulticellsDir string
 }
 
 var app App
@@ -68,6 +70,7 @@ var rootCmd = &cobra.Command{
 		}
 		app.DB = db
 		app.CellRepo = state.NewCellRepository(db)
+		app.MulticellRepo = state.NewMulticellRepository(db)
 		app.NotifRepo = state.NewNotificationRepository(db)
 
 		// Load global config
@@ -78,6 +81,7 @@ var rootCmd = &cobra.Command{
 		cellsDir := app.Config.ResolveCellsDir()
 		app.CloneMgr = clone.NewManager(cellsDir)
 		app.TmuxMgr = tmux.NewManager()
+		app.MulticellsDir = app.Config.ResolveMulticellsDir()
 
 		return nil
 	},

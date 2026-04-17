@@ -15,6 +15,7 @@ type CellType string
 const (
 	TypeNormal   CellType = "normal"
 	TypeHeadless CellType = "headless"
+	TypeMulti    CellType = "multi"
 )
 
 type Cell struct {
@@ -27,6 +28,15 @@ type Cell struct {
 	Type      CellType
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+type MulticellChild struct {
+	ID            int64
+	MulticellName string
+	Project       string
+	ClonePath     string
+	SourceRepo    string
+	CreatedAt     time.Time
 }
 
 type Notification struct {

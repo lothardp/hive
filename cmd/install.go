@@ -70,6 +70,18 @@ var installCmd = &cobra.Command{
 			cellsInput = filepath.Join(home, cellsInput[2:])
 		}
 
+		// 4b. Prompt for multicells directory
+		defaultMulticellsDir := filepath.Join(home, "hive", "multicells")
+		fmt.Printf("Multicells directory (where multi-project parent dirs live) [%s]: ", defaultMulticellsDir)
+		multiInput, _ := reader.ReadString('\n')
+		multiInput = strings.TrimSpace(multiInput)
+		if multiInput == "" {
+			multiInput = defaultMulticellsDir
+		}
+		if strings.HasPrefix(multiInput, "~/") {
+			multiInput = filepath.Join(home, multiInput[2:])
+		}
+
 		// 5. Prompt for editor
 		defaultEditor := os.Getenv("EDITOR")
 		if defaultEditor == "" {
@@ -84,9 +96,10 @@ var installCmd = &cobra.Command{
 
 		// 6. Write ~/.hive/config.yaml using config.WriteDefaultGlobal
 		cfg := &config.GlobalConfig{
-			ProjectDirs: projectDirs,
-			CellsDir:    cellsInput,
-			Editor:       editorInput,
+			ProjectDirs:   projectDirs,
+			CellsDir:      cellsInput,
+			MulticellsDir: multiInput,
+			Editor:        editorInput,
 		}
 		if err := config.WriteDefaultGlobal(hiveDir, cfg); err != nil {
 			return fmt.Errorf("writing global config: %w", err)
@@ -99,6 +112,14 @@ var installCmd = &cobra.Command{
 				return fmt.Errorf("creating cells directory: %w", err)
 			}
 			fmt.Printf("Created %s\n", cellsInput)
+		}
+
+		// 7b. Create multicells directory if missing
+		if _, err := os.Stat(multiInput); os.IsNotExist(err) {
+			if err := os.MkdirAll(multiInput, 0o755); err != nil {
+				return fmt.Errorf("creating multicells directory: %w", err)
+			}
+			fmt.Printf("Created %s\n", multiInput)
 		}
 
 		// 8. Generate ~/.hive/tmux.conf
@@ -114,8 +135,9 @@ var installCmd = &cobra.Command{
 
 		fmt.Println("\nHive installed successfully!")
 		fmt.Printf("  Config:   %s\n", filepath.Join(hiveDir, "config.yaml"))
-		fmt.Printf("  Cells:    %s\n", cellsInput)
-		fmt.Printf("  Projects: %s\n", strings.Join(projectDirs, ", "))
+		fmt.Printf("  Cells:       %s\n", cellsInput)
+		fmt.Printf("  Multicells:  %s\n", multiInput)
+		fmt.Printf("  Projects:    %s\n", strings.Join(projectDirs, ", "))
 		return nil
 	},
 }

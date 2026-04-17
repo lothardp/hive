@@ -55,6 +55,20 @@ var healthCmd = &cobra.Command{
 			}
 		}
 
+		// 2b. Collect multicell parent directories on disk.
+		// Structure: <multicells_dir>/<name> → cell name is just <name>
+		multicellsDir := app.Config.ResolveMulticellsDir()
+		mcDirs, err := os.ReadDir(multicellsDir)
+		if err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("reading multicells directory: %w", err)
+		}
+		for _, entry := range mcDirs {
+			if !entry.IsDir() {
+				continue
+			}
+			diskCells[entry.Name()] = filepath.Join(multicellsDir, entry.Name())
+		}
+
 		// 3. Collect tmux sessions
 		tmuxSessions, err := app.TmuxMgr.ListSessions(ctx)
 		if err != nil {
@@ -104,7 +118,12 @@ var healthCmd = &cobra.Command{
 
 			// Determine status
 			status := ""
-			isHeadless := inDB && dbCells[name].Type == state.TypeHeadless
+			cellType := state.TypeNormal
+			if inDB {
+				cellType = dbCells[name].Type
+			}
+			isHeadless := cellType == state.TypeHeadless
+			isMulti := cellType == state.TypeMulti
 
 			if isHeadless {
 				// Headless cells: only need DB + tmux, no disk
@@ -116,6 +135,15 @@ var healthCmd = &cobra.Command{
 					issues++
 				}
 				diskCol = "  -   " // not applicable
+			} else if isMulti {
+				// Multicells: need DB + parent dir + tmux
+				if inDB && onDisk && inTmux {
+					status = "ok (multi)"
+					healthy++
+				} else {
+					status = "multi: " + describeIssue(inDB, onDisk, inTmux)
+					issues++
+				}
 			} else if inDB && onDisk && inTmux {
 				status = "ok"
 				healthy++

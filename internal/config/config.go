@@ -12,10 +12,11 @@ import (
 
 // GlobalConfig is loaded from ~/.hive/config.yaml
 type GlobalConfig struct {
-	ProjectDirs []string `yaml:"project_dirs"`
-	CellsDir    string   `yaml:"cells_dir"`
-	Editor      string   `yaml:"editor"`
-	TmuxLeader  string   `yaml:"tmux_leader"`
+	ProjectDirs   []string `yaml:"project_dirs"`
+	CellsDir      string   `yaml:"cells_dir"`
+	MulticellsDir string   `yaml:"multicells_dir"`
+	Editor        string   `yaml:"editor"`
+	TmuxLeader    string   `yaml:"tmux_leader"`
 }
 
 // ProjectConfig is loaded from ~/.hive/config/{project}.yml
@@ -71,9 +72,10 @@ func LoadGlobalOrDefault(hiveDir string) *GlobalConfig {
 	cfg, err := LoadGlobal(hiveDir)
 	if err != nil {
 		cfg = &GlobalConfig{
-			CellsDir:   "~/hive/cells",
-			Editor:      "vim",
-			TmuxLeader:  "C-a",
+			CellsDir:      "~/hive/cells",
+			MulticellsDir: "~/hive/multicells",
+			Editor:        "vim",
+			TmuxLeader:    "C-a",
 		}
 	}
 	return cfg
@@ -162,6 +164,15 @@ func (g *GlobalConfig) ResolveProjectDirs() []string {
 // ResolveCellsDir expands ~ to the user's home directory.
 func (g *GlobalConfig) ResolveCellsDir() string {
 	return expandTilde(g.CellsDir)
+}
+
+// ResolveMulticellsDir expands ~ to the user's home directory. Falls back to
+// ~/hive/multicells when unset.
+func (g *GlobalConfig) ResolveMulticellsDir() string {
+	if g.MulticellsDir == "" {
+		return expandTilde("~/hive/multicells")
+	}
+	return expandTilde(g.MulticellsDir)
 }
 
 // ResolveEditor returns the configured editor, falling back to the $EDITOR

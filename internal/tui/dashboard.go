@@ -34,6 +34,8 @@ type Model struct {
 
 	// Create flow overlay
 	creating      *CreateModel
+	// Multicell create overlay
+	creatingMulti *CreateMultiModel
 	// Headless create overlay
 	creatingHL    bool
 	headlessInput string
@@ -60,6 +62,7 @@ type Model struct {
 // NewModel creates a dashboard model with required dependencies.
 func NewModel(
 	cellRepo *state.CellRepository,
+	multicellRepo *state.MulticellRepository,
 	notifRepo *state.NotificationRepository,
 	tmuxMgr *tmux.Manager,
 	cloneMgr *clone.Manager,
@@ -68,11 +71,13 @@ func NewModel(
 	db *sql.DB,
 ) Model {
 	svc := &cell.Service{
-		CellRepo: cellRepo,
-		CloneMgr: cloneMgr,
-		TmuxMgr:  tmuxMgr,
-		HiveDir:  hiveDir,
-		DB:       db,
+		CellRepo:      cellRepo,
+		MulticellRepo: multicellRepo,
+		CloneMgr:      cloneMgr,
+		TmuxMgr:       tmuxMgr,
+		HiveDir:       hiveDir,
+		MulticellsDir: globalCfg.ResolveMulticellsDir(),
+		DB:            db,
 	}
 
 	editor := globalCfg.ResolveEditor()
@@ -134,6 +139,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateCreating(msg)
 	}
 
+	// If creating a multicell, delegate to the multi overlay
+	if m.creatingMulti != nil {
+		return m.updateCreatingMulti(msg)
+	}
+
 	// If creating a headless cell, handle that
 	if m.creatingHL {
 		return m.updateHeadless(msg)
@@ -174,6 +184,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Create actions (only from cells tab)
 		case m.activeTab == tabCells && key.Matches(msg, dashKeys.Create):
 			return m.startCreate()
+
+		case m.activeTab == tabCells && key.Matches(msg, dashKeys.Multicell):
+			return m.startCreateMulti()
 
 		case m.activeTab == tabCells && key.Matches(msg, dashKeys.Headless):
 			m.creatingHL = true
@@ -258,6 +271,27 @@ func (m Model) updateCreating(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.cells.LoadCells()
 	}
 	m.creating = updated
+	return m, cmd
+}
+
+func (m Model) startCreateMulti() (tea.Model, tea.Cmd) {
+	dirs := m.globalCfg.ResolveProjectDirs()
+	projects, _ := config.DiscoverProjects(dirs)
+	if len(projects) == 0 {
+		m.cells.message = "No projects found. Configure project_dirs first."
+		return m, nil
+	}
+	m.creatingMulti = NewCreateMultiModel(m.cellService, projects)
+	return m, nil
+}
+
+func (m Model) updateCreatingMulti(msg tea.Msg) (tea.Model, tea.Cmd) {
+	updated, cmd := m.creatingMulti.Update(msg)
+	if updated == nil {
+		m.creatingMulti = nil
+		return m, m.cells.LoadCells()
+	}
+	m.creatingMulti = updated
 	return m, cmd
 }
 
@@ -483,6 +517,8 @@ func (m Model) View() string {
 	var content string
 	if m.creating != nil {
 		content = m.creating.View(m.width, m.height)
+	} else if m.creatingMulti != nil {
+		content = m.creatingMulti.View(m.width, m.height)
 	} else if m.openingProject {
 		content = m.viewOpenProject()
 	} else if m.creatingHL {
@@ -594,6 +630,7 @@ type dashKeyMap struct {
 	NextTab     key.Binding
 	PrevTab     key.Binding
 	Create      key.Binding
+	Multicell   key.Binding
 	Headless    key.Binding
 	OpenProject key.Binding
 }
@@ -605,6 +642,7 @@ var dashKeys = dashKeyMap{
 	NextTab:     key.NewBinding(key.WithKeys("l")),
 	PrevTab:     key.NewBinding(key.WithKeys("h")),
 	Create:      key.NewBinding(key.WithKeys("c")),
+	Multicell:   key.NewBinding(key.WithKeys("C")),
 	Headless:    key.NewBinding(key.WithKeys("H")),
 	OpenProject: key.NewBinding(key.WithKeys("o")),
 }

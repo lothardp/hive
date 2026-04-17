@@ -75,6 +75,12 @@ func (m CellsModel) LoadCells() tea.Cmd {
 		var projects []string
 		for _, c := range cells {
 			p := c.Project
+			switch c.Type {
+			case state.TypeHeadless:
+				p = "(headless)"
+			case state.TypeMulti:
+				p = "(multicells)"
+			}
 			if p == "" {
 				p = "(headless)"
 			}
@@ -290,9 +296,12 @@ func (m CellsModel) View(width int) string {
 
 		// Name with type indicator
 		var name string
-		if c.Type == state.TypeHeadless {
+		switch c.Type {
+		case state.TypeHeadless:
 			name = "  ◇ " + c.Name
-		} else {
+		case state.TypeMulti:
+			name = "  ⧉ " + c.Name
+		default:
 			name = "    " + c.Name
 		}
 
@@ -335,7 +344,7 @@ func (m CellsModel) Footer() string {
 	if m.message != "" {
 		return m.message
 	}
-	return helpStyle.Render("enter switch  c create  o open  H headless  x kill  n read notifs  r refresh  h/l tabs  q quit")
+	return helpStyle.Render("enter switch  c create  C multicell  o open  H headless  x kill  n read notifs  r refresh  h/l tabs  q quit")
 }
 
 // Helpers
