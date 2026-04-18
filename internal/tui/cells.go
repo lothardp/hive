@@ -70,26 +70,59 @@ func (m CellsModel) LoadCells() tea.Cmd {
 			return cellsLoaded{}
 		}
 
-		// Group by project
+		// Group by project. Multicell coordinators and their children share
+		// a "⧉ <name>" bucket; headless cells go into "(headless)".
 		byProject := make(map[string][]state.Cell)
 		var projects []string
 		for _, c := range cells {
-			p := c.Project
+			var p string
 			switch c.Type {
 			case state.TypeHeadless:
 				p = "(headless)"
 			case state.TypeMulti:
-				p = "(multicells)"
-			}
-			if p == "" {
-				p = "(headless)"
+				p = "⧉ " + c.Name
+			case state.TypeMultiChild:
+				p = "⧉ " + c.Parent
+			default:
+				p = c.Project
+				if p == "" {
+					p = "(headless)"
+				}
 			}
 			if _, seen := byProject[p]; !seen {
 				projects = append(projects, p)
 			}
 			byProject[p] = append(byProject[p], c)
 		}
-		sort.Strings(projects)
+		// Multicell groups first (prefix "⧉ "), then everything else, both
+		// alphabetical within each class.
+		sort.SliceStable(projects, func(i, j int) bool {
+			mi := strings.HasPrefix(projects[i], "⧉ ")
+			mj := strings.HasPrefix(projects[j], "⧉ ")
+			if mi != mj {
+				return mi
+			}
+			return projects[i] < projects[j]
+		})
+
+		// Within each bucket, coordinator rows float above children, and
+		// ties break alphabetically by name.
+		for _, p := range projects {
+			bucket := byProject[p]
+			sort.SliceStable(bucket, func(i, j int) bool {
+				a, b := bucket[i], bucket[j]
+				if a.Type != b.Type {
+					if a.Type == state.TypeMulti {
+						return true
+					}
+					if b.Type == state.TypeMulti {
+						return false
+					}
+				}
+				return a.Name < b.Name
+			})
+			byProject[p] = bucket
+		}
 
 		// Track cell names to find unmanaged tmux sessions
 		cellNames := make(map[string]bool, len(cells))
@@ -301,6 +334,9 @@ func (m CellsModel) View(width int) string {
 			name = "  ◇ " + c.Name
 		case state.TypeMulti:
 			name = "  ⧉ " + c.Name
+		case state.TypeMultiChild:
+			// Membership is already communicated by the group header.
+			name = "    " + c.Name
 		default:
 			name = "    " + c.Name
 		}

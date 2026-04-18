@@ -244,6 +244,91 @@ func TestCountByProject(t *testing.T) {
 	}
 }
 
+func TestParentPersistedAndListChildren(t *testing.T) {
+	repo := setupTestDB(t)
+	ctx := context.Background()
+
+	coord := &Cell{Name: "auth", Project: "", ClonePath: "/tmp/auth", Status: StatusRunning, Ports: "{}", Type: TypeMulti}
+	if err := repo.Create(ctx, coord); err != nil {
+		t.Fatalf("creating coordinator: %v", err)
+	}
+
+	children := []Cell{
+		{Name: "api-auth", Project: "api", ClonePath: "/tmp/auth/api-auth", Status: StatusRunning, Ports: "{}", Type: TypeMultiChild, Parent: "auth"},
+		{Name: "web-auth", Project: "web", ClonePath: "/tmp/auth/web-auth", Status: StatusRunning, Ports: "{}", Type: TypeMultiChild, Parent: "auth"},
+	}
+	for i := range children {
+		if err := repo.Create(ctx, &children[i]); err != nil {
+			t.Fatalf("creating child %s: %v", children[i].Name, err)
+		}
+	}
+
+	// GetByName should surface Parent.
+	got, err := repo.GetByName(ctx, "api-auth")
+	if err != nil {
+		t.Fatalf("GetByName: %v", err)
+	}
+	if got == nil || got.Parent != "auth" {
+		t.Fatalf("expected parent %q, got %+v", "auth", got)
+	}
+
+	// Coordinator should have empty Parent.
+	gotCoord, err := repo.GetByName(ctx, "auth")
+	if err != nil {
+		t.Fatalf("GetByName coordinator: %v", err)
+	}
+	if gotCoord.Parent != "" {
+		t.Errorf("expected empty parent for coordinator, got %q", gotCoord.Parent)
+	}
+
+	// ListChildren returns only the coordinator's children, ordered by project.
+	list, err := repo.ListChildren(ctx, "auth")
+	if err != nil {
+		t.Fatalf("ListChildren: %v", err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("expected 2 children, got %d", len(list))
+	}
+	if list[0].Name != "api-auth" || list[1].Name != "web-auth" {
+		t.Errorf("unexpected child order: %q, %q", list[0].Name, list[1].Name)
+	}
+
+	// Listing for an unknown parent returns empty.
+	empty, err := repo.ListChildren(ctx, "nope")
+	if err != nil {
+		t.Fatalf("ListChildren nope: %v", err)
+	}
+	if len(empty) != 0 {
+		t.Errorf("expected 0 children for unknown parent, got %d", len(empty))
+	}
+}
+
+func TestDeleteCoordinatorCascadesChildren(t *testing.T) {
+	repo := setupTestDB(t)
+	ctx := context.Background()
+
+	coord := &Cell{Name: "mc", Project: "", ClonePath: "/tmp/mc", Status: StatusRunning, Ports: "{}", Type: TypeMulti}
+	if err := repo.Create(ctx, coord); err != nil {
+		t.Fatalf("creating coordinator: %v", err)
+	}
+	child := &Cell{Name: "api-mc", Project: "api", ClonePath: "/tmp/mc/api-mc", Status: StatusRunning, Ports: "{}", Type: TypeMultiChild, Parent: "mc"}
+	if err := repo.Create(ctx, child); err != nil {
+		t.Fatalf("creating child: %v", err)
+	}
+
+	if err := repo.Delete(ctx, "mc"); err != nil {
+		t.Fatalf("deleting coordinator: %v", err)
+	}
+
+	got, err := repo.GetByName(ctx, "api-mc")
+	if err != nil {
+		t.Fatalf("GetByName after cascade: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected child to be cascade-deleted, got %+v", got)
+	}
+}
+
 func TestListIncludesType(t *testing.T) {
 	repo := setupTestDB(t)
 	ctx := context.Background()

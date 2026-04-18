@@ -13,9 +13,10 @@ const (
 type CellType string
 
 const (
-	TypeNormal   CellType = "normal"
-	TypeHeadless CellType = "headless"
-	TypeMulti    CellType = "multi"
+	TypeNormal     CellType = "normal"
+	TypeHeadless   CellType = "headless"
+	TypeMulti      CellType = "multi"
+	TypeMultiChild CellType = "multi_child"
 )
 
 type Cell struct {
@@ -26,17 +27,9 @@ type Cell struct {
 	Status    CellStatus
 	Ports     string
 	Type      CellType
+	Parent    string
 	CreatedAt time.Time
 	UpdatedAt time.Time
-}
-
-type MulticellChild struct {
-	ID            int64
-	MulticellName string
-	Project       string
-	ClonePath     string
-	SourceRepo    string
-	CreatedAt     time.Time
 }
 
 type Notification struct {

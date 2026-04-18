@@ -62,7 +62,6 @@ type Model struct {
 // NewModel creates a dashboard model with required dependencies.
 func NewModel(
 	cellRepo *state.CellRepository,
-	multicellRepo *state.MulticellRepository,
 	notifRepo *state.NotificationRepository,
 	tmuxMgr *tmux.Manager,
 	cloneMgr *clone.Manager,
@@ -72,7 +71,6 @@ func NewModel(
 ) Model {
 	svc := &cell.Service{
 		CellRepo:      cellRepo,
-		MulticellRepo: multicellRepo,
 		CloneMgr:      cloneMgr,
 		TmuxMgr:       tmuxMgr,
 		HiveDir:       hiveDir,

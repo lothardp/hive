@@ -19,7 +19,6 @@ import (
 type App struct {
 	DB            *sql.DB
 	CellRepo      *state.CellRepository
-	MulticellRepo *state.MulticellRepository
 	NotifRepo     *state.NotificationRepository
 	Config        *config.GlobalConfig
 	HiveDir       string
@@ -70,7 +69,6 @@ var rootCmd = &cobra.Command{
 		}
 		app.DB = db
 		app.CellRepo = state.NewCellRepository(db)
-		app.MulticellRepo = state.NewMulticellRepository(db)
 		app.NotifRepo = state.NewNotificationRepository(db)
 
 		// Load global config

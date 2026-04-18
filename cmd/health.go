@@ -55,8 +55,10 @@ var healthCmd = &cobra.Command{
 			}
 		}
 
-		// 2b. Collect multicell parent directories on disk.
-		// Structure: <multicells_dir>/<name> → cell name is just <name>
+		// 2b. Collect multicell coordinators (depth 1) and first-class children
+		// (depth 2) on disk.
+		// Structure: <multicells_dir>/<name>           → coordinator
+		//            <multicells_dir>/<name>/<proj>-<name> → child cell
 		multicellsDir := app.Config.ResolveMulticellsDir()
 		mcDirs, err := os.ReadDir(multicellsDir)
 		if err != nil && !os.IsNotExist(err) {
@@ -66,7 +68,22 @@ var healthCmd = &cobra.Command{
 			if !entry.IsDir() {
 				continue
 			}
-			diskCells[entry.Name()] = filepath.Join(multicellsDir, entry.Name())
+			mcName := entry.Name()
+			mcPath := filepath.Join(multicellsDir, mcName)
+			diskCells[mcName] = mcPath
+
+			children, _ := os.ReadDir(mcPath)
+			for _, child := range children {
+				if !child.IsDir() {
+					continue
+				}
+				// Only count dirs that match the "<project>-<mcName>" naming
+				// convention so stray files/dirs don't pollute the report.
+				if !strings.HasSuffix(child.Name(), "-"+mcName) {
+					continue
+				}
+				diskCells[child.Name()] = filepath.Join(mcPath, child.Name())
+			}
 		}
 
 		// 3. Collect tmux sessions
@@ -124,6 +141,7 @@ var healthCmd = &cobra.Command{
 			}
 			isHeadless := cellType == state.TypeHeadless
 			isMulti := cellType == state.TypeMulti
+			isMultiChild := cellType == state.TypeMultiChild
 
 			if isHeadless {
 				// Headless cells: only need DB + tmux, no disk
@@ -142,6 +160,15 @@ var healthCmd = &cobra.Command{
 					healthy++
 				} else {
 					status = "multi: " + describeIssue(inDB, onDisk, inTmux)
+					issues++
+				}
+			} else if isMultiChild {
+				// Multicell children: need DB + child dir + tmux
+				if inDB && onDisk && inTmux {
+					status = "ok (child of " + dbCells[name].Parent + ")"
+					healthy++
+				} else {
+					status = "child: " + describeIssue(inDB, onDisk, inTmux)
 					issues++
 				}
 			} else if inDB && onDisk && inTmux {

@@ -131,6 +131,8 @@ func (m SwitcherModel) View() string {
 			typeTag = " [headless]"
 		case state.TypeMulti:
 			typeTag = " [multi]"
+		case state.TypeMultiChild:
+			typeTag = " [" + c.Parent + "]"
 		}
 
 		// Status indicator

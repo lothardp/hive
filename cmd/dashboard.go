@@ -17,7 +17,6 @@ var dashboardCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		m := tui.NewModel(
 			app.CellRepo,
-			app.MulticellRepo,
 			app.NotifRepo,
 			app.TmuxMgr,
 			app.CloneMgr,

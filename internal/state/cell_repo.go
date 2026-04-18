@@ -20,10 +20,14 @@ func (r *CellRepository) Create(ctx context.Context, cell *Cell) error {
 	if cell.Type == "" {
 		cell.Type = TypeNormal
 	}
+	var parent sql.NullString
+	if cell.Parent != "" {
+		parent = sql.NullString{String: cell.Parent, Valid: true}
+	}
 	result, err := r.db.ExecContext(ctx,
-		`INSERT INTO cells (name, project, clone_path, status, ports, type, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		cell.Name, cell.Project, cell.ClonePath, cell.Status, cell.Ports, cell.Type, now, now,
+		`INSERT INTO cells (name, project, clone_path, status, ports, type, parent, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		cell.Name, cell.Project, cell.ClonePath, cell.Status, cell.Ports, cell.Type, parent, now, now,
 	)
 	if err != nil {
 		return fmt.Errorf("inserting cell: %w", err)
@@ -40,7 +44,7 @@ func (r *CellRepository) Create(ctx context.Context, cell *Cell) error {
 
 func (r *CellRepository) GetByName(ctx context.Context, name string) (*Cell, error) {
 	row := r.db.QueryRowContext(ctx,
-		`SELECT id, name, project, clone_path, status, ports, type, created_at, updated_at
+		`SELECT id, name, project, clone_path, status, ports, type, parent, created_at, updated_at
 		 FROM cells WHERE name = ?`, name,
 	)
 	return scanCell(row)
@@ -48,7 +52,7 @@ func (r *CellRepository) GetByName(ctx context.Context, name string) (*Cell, err
 
 func (r *CellRepository) List(ctx context.Context) ([]Cell, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, name, project, clone_path, status, ports, type, created_at, updated_at
+		`SELECT id, name, project, clone_path, status, ports, type, parent, created_at, updated_at
 		 FROM cells ORDER BY created_at DESC`,
 	)
 	if err != nil {
@@ -60,11 +64,25 @@ func (r *CellRepository) List(ctx context.Context) ([]Cell, error) {
 
 func (r *CellRepository) ListByStatus(ctx context.Context, status CellStatus) ([]Cell, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, name, project, clone_path, status, ports, type, created_at, updated_at
+		`SELECT id, name, project, clone_path, status, ports, type, parent, created_at, updated_at
 		 FROM cells WHERE status = ? ORDER BY created_at DESC`, status,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing cells by status: %w", err)
+	}
+	defer rows.Close()
+	return scanCells(rows)
+}
+
+// ListChildren returns all cells whose parent column equals the given multicell
+// name, ordered by project for stable display.
+func (r *CellRepository) ListChildren(ctx context.Context, multicellName string) ([]Cell, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, name, project, clone_path, status, ports, type, parent, created_at, updated_at
+		 FROM cells WHERE parent = ? ORDER BY project`, multicellName,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing multicell children: %w", err)
 	}
 	defer rows.Close()
 	return scanCells(rows)
@@ -98,12 +116,16 @@ func (r *CellRepository) Delete(ctx context.Context, name string) error {
 
 func scanCell(row *sql.Row) (*Cell, error) {
 	var c Cell
-	err := row.Scan(&c.ID, &c.Name, &c.Project, &c.ClonePath, &c.Status, &c.Ports, &c.Type, &c.CreatedAt, &c.UpdatedAt)
+	var parent sql.NullString
+	err := row.Scan(&c.ID, &c.Name, &c.Project, &c.ClonePath, &c.Status, &c.Ports, &c.Type, &parent, &c.CreatedAt, &c.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("scanning cell: %w", err)
+	}
+	if parent.Valid {
+		c.Parent = parent.String
 	}
 	return &c, nil
 }
@@ -112,8 +134,12 @@ func scanCells(rows *sql.Rows) ([]Cell, error) {
 	var cells []Cell
 	for rows.Next() {
 		var c Cell
-		if err := rows.Scan(&c.ID, &c.Name, &c.Project, &c.ClonePath, &c.Status, &c.Ports, &c.Type, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		var parent sql.NullString
+		if err := rows.Scan(&c.ID, &c.Name, &c.Project, &c.ClonePath, &c.Status, &c.Ports, &c.Type, &parent, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scanning cell: %w", err)
+		}
+		if parent.Valid {
+			c.Parent = parent.String
 		}
 		cells = append(cells, c)
 	}

@@ -23,7 +23,6 @@ import (
 // Service encapsulates cell lifecycle operations (create, kill, list).
 type Service struct {
 	CellRepo      *state.CellRepository
-	MulticellRepo *state.MulticellRepository
 	CloneMgr      *clone.Manager
 	TmuxMgr       *tmux.Manager
 	HiveDir       string
@@ -241,6 +240,118 @@ func (s *Service) Create(ctx context.Context, opts CreateOpts) (*CreateResult, e
 	}, nil
 }
 
+// ProvisionChildOpts describes a single multicell child to provision.
+type ProvisionChildOpts struct {
+	Project    string // e.g. "api"
+	SourceRepo string // git source path/URL
+	ParentName string // coordinator multicell name, e.g. "auth-overhaul"
+	ParentDir  string // absolute path to the parent dir
+}
+
+// ProvisionChildResult is the outcome for one successful child.
+type ProvisionChildResult struct {
+	CellName  string
+	ClonePath string
+	Ports     map[string]int
+	HookLog   string
+	LayoutLog string
+}
+
+// provisionChildCell provisions a single first-class multicell child end-to-end:
+// provisionClone (clone + ports + hooks) → kill orphan tmux → create session →
+// apply default layout → insert TypeMultiChild cells row.
+//
+// On failure, rolls back the child's tmux session and clone dir only. Does not
+// touch the parent dir or sibling cells.
+func (s *Service) provisionChildCell(ctx context.Context, opts ProvisionChildOpts) (*ProvisionChildResult, error) {
+	cellName := opts.Project + "-" + opts.ParentName
+	target := filepath.Join(opts.ParentDir, cellName)
+
+	existing, err := s.CellRepo.GetByName(ctx, cellName)
+	if err != nil {
+		return nil, fmt.Errorf("checking child cell existence: %w", err)
+	}
+	if existing != nil {
+		return nil, fmt.Errorf("child cell %q already exists", cellName)
+	}
+
+	prov, err := s.provisionClone(ctx, ProvisionOpts{
+		Project:    opts.Project,
+		SourceRepo: opts.SourceRepo,
+		TargetPath: target,
+		CellName:   cellName,
+		AllocPorts: true,
+		ExtraEnv: map[string]string{
+			"HIVE_MULTICELL":     opts.ParentName,
+			"HIVE_MULTICELL_DIR": opts.ParentDir,
+			"HIVE_PROJECT":       opts.Project,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	_ = s.TmuxMgr.KillSession(ctx, cellName)
+
+	if err := s.TmuxMgr.CreateSession(ctx, cellName, prov.ClonePath, prov.Env); err != nil {
+		if rmErr := os.RemoveAll(prov.ClonePath); rmErr != nil {
+			slog.Warn("rollback: failed to remove child clone", "path", prov.ClonePath, "error", rmErr)
+		}
+		return nil, fmt.Errorf("creating tmux session: %w", err)
+	}
+
+	rollback := func() {
+		if killErr := s.TmuxMgr.KillSession(ctx, cellName); killErr != nil {
+			slog.Warn("rollback: failed to kill child tmux session", "name", cellName, "error", killErr)
+		}
+		if rmErr := os.RemoveAll(prov.ClonePath); rmErr != nil {
+			slog.Warn("rollback: failed to remove child clone", "path", prov.ClonePath, "error", rmErr)
+		}
+	}
+
+	layoutLog := ""
+	if lyt, ok := prov.Config.Layouts["default"]; ok {
+		if err := layout.Apply(ctx, cellName, prov.ClonePath, lyt); err != nil {
+			layoutLog = fmt.Sprintf("layout error: %v", err)
+			slog.Warn("failed to apply default layout", "cell", cellName, "error", err)
+		} else {
+			layoutLog = "default layout applied"
+		}
+	}
+
+	portsJSON := "{}"
+	if len(prov.Ports) > 0 {
+		data, err := json.Marshal(prov.Ports)
+		if err != nil {
+			rollback()
+			return nil, fmt.Errorf("marshaling ports: %w", err)
+		}
+		portsJSON = string(data)
+	}
+
+	child := &state.Cell{
+		Name:      cellName,
+		Project:   opts.Project,
+		ClonePath: prov.ClonePath,
+		Status:    state.StatusRunning,
+		Ports:     portsJSON,
+		Type:      state.TypeMultiChild,
+		Parent:    opts.ParentName,
+	}
+	if err := s.CellRepo.Create(ctx, child); err != nil {
+		rollback()
+		return nil, fmt.Errorf("saving child cell %q: %w", cellName, err)
+	}
+
+	return &ProvisionChildResult{
+		CellName:  cellName,
+		ClonePath: prov.ClonePath,
+		Ports:     prov.Ports,
+		HookLog:   prov.HookLog,
+		LayoutLog: layoutLog,
+	}, nil
+}
+
 // Kill tears down a cell: tmux session, clone directory, DB record.
 func (s *Service) Kill(ctx context.Context, cellName string) error {
 	slog.Info("killing cell", "name", cellName)
@@ -252,27 +363,42 @@ func (s *Service) Kill(ctx context.Context, cellName string) error {
 		return fmt.Errorf("cell %q not found", cellName)
 	}
 
-	// Kill tmux session (best-effort).
+	// Kill this cell's tmux session (best-effort).
 	if err := s.TmuxMgr.KillSession(ctx, cellName); err != nil {
 		slog.Warn("failed to kill tmux session", "name", cellName, "error", err)
 	}
 
-	// Remove working directory based on cell type (best-effort).
 	switch cell.Type {
 	case state.TypeMulti:
+		// Kill each child's tmux session; their dirs will vanish with the parent
+		// dir below, but their sessions won't self-destruct.
+		children, err := s.CellRepo.ListChildren(ctx, cellName)
+		if err != nil {
+			slog.Warn("listing multicell children", "name", cellName, "error", err)
+		}
+		for _, child := range children {
+			if err := s.TmuxMgr.KillSession(ctx, child.Name); err != nil {
+				slog.Warn("failed to kill child tmux session", "name", child.Name, "error", err)
+			}
+		}
 		if cell.ClonePath != "" {
 			if err := s.removeMulticellDir(cell.ClonePath); err != nil {
 				slog.Warn("failed to remove multicell dir", "path", cell.ClonePath, "error", err)
 			}
 		}
-		// Cascade should clear child rows via FK, but call explicitly for safety.
-		if s.MulticellRepo != nil {
-			if err := s.MulticellRepo.DeleteByMulticell(ctx, cellName); err != nil {
-				slog.Warn("failed to delete multicell children", "name", cellName, "error", err)
+		// FK ON DELETE CASCADE removes child cell rows when we delete the
+		// coordinator row below.
+
+	case state.TypeMultiChild:
+		if cell.ClonePath != "" {
+			if err := s.removeMulticellDir(cell.ClonePath); err != nil {
+				slog.Warn("failed to remove multicell child dir", "path", cell.ClonePath, "error", err)
 			}
 		}
+
 	case state.TypeHeadless:
 		// No clone to remove.
+
 	default:
 		if cell.ClonePath != "" {
 			if err := s.CloneMgr.Remove(cell.ClonePath); err != nil {
@@ -281,7 +407,6 @@ func (s *Service) Kill(ctx context.Context, cellName string) error {
 		}
 	}
 
-	// Delete DB record.
 	if err := s.CellRepo.Delete(ctx, cellName); err != nil {
 		return fmt.Errorf("deleting cell record: %w", err)
 	}
@@ -367,9 +492,10 @@ type MultiResult struct {
 	HookLogs   map[string]string // project name → hook log summary
 }
 
-// CreateMulti provisions a multicell: parent dir + N provisioned clones (with
-// per-project hooks) + one tmux session + DB rows. On failure at any step, the
-// parent dir and any created state are rolled back.
+// CreateMulti provisions a multicell: parent dir + coordinator tmux session +
+// N first-class child cells (each with its own clone, hooks, ports, tmux
+// session, layout, and DB row). On failure at any step, already-created state
+// is rolled back.
 func (s *Service) CreateMulti(ctx context.Context, opts MultiOpts) (*MultiResult, error) {
 	slog.Info("creating multicell", "name", opts.Name, "projects", len(opts.Projects))
 
@@ -396,13 +522,30 @@ func (s *Service) CreateMulti(ctx context.Context, opts MultiOpts) (*MultiResult
 		seen[p.Name] = true
 	}
 
-	// 4. Compute parent dir.
+	// 4. Every prospective child cell name must be free too.
+	for _, p := range opts.Projects {
+		childName := p.Name + "-" + opts.Name
+		c, err := s.CellRepo.GetByName(ctx, childName)
+		if err != nil {
+			return nil, fmt.Errorf("checking child cell existence: %w", err)
+		}
+		if c != nil {
+			return nil, fmt.Errorf("child cell %q would collide with existing cell", childName)
+		}
+	}
+
+	// 5. Compute parent dir.
 	if s.MulticellsDir == "" {
 		return nil, fmt.Errorf("multicells directory not configured")
 	}
 	parentDir := filepath.Join(s.MulticellsDir, opts.Name)
 
-	// 5. Orphan cleanup + mkdir.
+	// 6. Kill any orphaned coordinator tmux session BEFORE the rmdir.
+	// A stale session with cwd inside parentDir keeps file handles and races
+	// against the wipe.
+	_ = s.TmuxMgr.KillSession(ctx, opts.Name)
+
+	// 7. Orphan cleanup + mkdir.
 	if err := os.RemoveAll(parentDir); err != nil {
 		return nil, fmt.Errorf("removing orphaned multicell dir %q: %w", parentDir, err)
 	}
@@ -410,68 +553,31 @@ func (s *Service) CreateMulti(ctx context.Context, opts MultiOpts) (*MultiResult
 		return nil, fmt.Errorf("creating multicell dir %q: %w", parentDir, err)
 	}
 
-	rollbackAll := func() {
-		if err := os.RemoveAll(parentDir); err != nil {
-			slog.Warn("rollback: failed to remove multicell dir", "path", parentDir, "error", err)
-		}
-	}
-
-	// 6. Provision each project sequentially.
-	projectNames := make([]string, 0, len(opts.Projects))
-	clonePaths := make([]string, 0, len(opts.Projects))
-	hookLogs := make(map[string]string, len(opts.Projects))
-	sourceRepos := make(map[string]string, len(opts.Projects))
-
-	for _, p := range opts.Projects {
-		childDirName := p.Name + "-" + opts.Name
-		target := filepath.Join(parentDir, childDirName)
-
-		prov, err := s.provisionClone(ctx, ProvisionOpts{
-			Project:    p.Name,
-			SourceRepo: p.Path,
-			TargetPath: target,
-			CellName:   opts.Name,
-			AllocPorts: false,
-			ExtraEnv: map[string]string{
-				"HIVE_MULTICELL":     opts.Name,
-				"HIVE_MULTICELL_DIR": parentDir,
-				"HIVE_PROJECT":       p.Name,
-			},
-		})
-		if err != nil {
-			rollbackAll()
-			return nil, fmt.Errorf("provisioning %q: %w", p.Name, err)
-		}
-
-		projectNames = append(projectNames, p.Name)
-		clonePaths = append(clonePaths, prov.ClonePath)
-		hookLogs[p.Name] = prov.HookLog
-		sourceRepos[p.Name] = p.Path
-	}
-
-	// 7. Kill any orphaned tmux session with this name.
-	_ = s.TmuxMgr.KillSession(ctx, opts.Name)
-
-	// 8. Create tmux session rooted at parentDir.
-	envVars := map[string]string{
+	// 8. Create coordinator tmux session rooted at parentDir (plain shell,
+	// no ports/hooks/layout).
+	coordEnv := map[string]string{
 		"HIVE_CELL":          opts.Name,
 		"HIVE_MULTICELL":     opts.Name,
 		"HIVE_MULTICELL_DIR": parentDir,
 	}
-	if err := s.TmuxMgr.CreateSession(ctx, opts.Name, parentDir, envVars); err != nil {
-		rollbackAll()
-		return nil, fmt.Errorf("creating tmux session: %w", err)
-	}
-
-	rollbackTmuxAndDir := func() {
-		if killErr := s.TmuxMgr.KillSession(ctx, opts.Name); killErr != nil {
-			slog.Warn("rollback: failed to kill tmux session", "name", opts.Name, "error", killErr)
+	if err := s.TmuxMgr.CreateSession(ctx, opts.Name, parentDir, coordEnv); err != nil {
+		if rmErr := os.RemoveAll(parentDir); rmErr != nil {
+			slog.Warn("rollback: failed to remove multicell dir", "path", parentDir, "error", rmErr)
 		}
-		rollbackAll()
+		return nil, fmt.Errorf("creating coordinator tmux session: %w", err)
 	}
 
-	// 9. Insert cells row with TypeMulti.
-	cell := &state.Cell{
+	rollbackCoord := func() {
+		if killErr := s.TmuxMgr.KillSession(ctx, opts.Name); killErr != nil {
+			slog.Warn("rollback: failed to kill coordinator tmux session", "name", opts.Name, "error", killErr)
+		}
+		if rmErr := os.RemoveAll(parentDir); rmErr != nil {
+			slog.Warn("rollback: failed to remove multicell dir", "path", parentDir, "error", rmErr)
+		}
+	}
+
+	// 9. Insert coordinator cells row (needed before children for FK).
+	coord := &state.Cell{
 		Name:      opts.Name,
 		Project:   "",
 		ClonePath: parentDir,
@@ -479,26 +585,49 @@ func (s *Service) CreateMulti(ctx context.Context, opts MultiOpts) (*MultiResult
 		Ports:     "{}",
 		Type:      state.TypeMulti,
 	}
-	if err := s.CellRepo.Create(ctx, cell); err != nil {
-		rollbackTmuxAndDir()
-		return nil, fmt.Errorf("saving multicell to database: %w", err)
+	if err := s.CellRepo.Create(ctx, coord); err != nil {
+		rollbackCoord()
+		return nil, fmt.Errorf("saving coordinator cell: %w", err)
 	}
 
-	// 10. Insert child rows. Any failure → full rollback (includes DB row).
-	for i, name := range projectNames {
-		child := &state.MulticellChild{
-			MulticellName: opts.Name,
-			Project:       name,
-			ClonePath:     clonePaths[i],
-			SourceRepo:    sourceRepos[name],
-		}
-		if err := s.MulticellRepo.AddChild(ctx, child); err != nil {
-			if delErr := s.CellRepo.Delete(ctx, opts.Name); delErr != nil {
-				slog.Warn("rollback: failed to delete multicell row", "name", opts.Name, "error", delErr)
+	// 10. Provision each child cell sequentially. On any failure, tear down
+	// already-created children first, then the coordinator.
+	projectNames := make([]string, 0, len(opts.Projects))
+	clonePaths := make([]string, 0, len(opts.Projects))
+	hookLogs := make(map[string]string, len(opts.Projects))
+	createdChildNames := make([]string, 0, len(opts.Projects))
+
+	rollbackAll := func() {
+		for _, name := range createdChildNames {
+			if err := s.TmuxMgr.KillSession(ctx, name); err != nil {
+				slog.Warn("rollback: failed to kill child tmux session", "name", name, "error", err)
 			}
-			rollbackTmuxAndDir()
-			return nil, fmt.Errorf("saving multicell child %q: %w", name, err)
+			if err := s.CellRepo.Delete(ctx, name); err != nil {
+				slog.Warn("rollback: failed to delete child cell row", "name", name, "error", err)
+			}
 		}
+		if err := s.CellRepo.Delete(ctx, opts.Name); err != nil {
+			slog.Warn("rollback: failed to delete coordinator row", "name", opts.Name, "error", err)
+		}
+		rollbackCoord()
+	}
+
+	for _, p := range opts.Projects {
+		childRes, err := s.provisionChildCell(ctx, ProvisionChildOpts{
+			Project:    p.Name,
+			SourceRepo: p.Path,
+			ParentName: opts.Name,
+			ParentDir:  parentDir,
+		})
+		if err != nil {
+			rollbackAll()
+			return nil, fmt.Errorf("provisioning %q: %w", p.Name, err)
+		}
+
+		projectNames = append(projectNames, p.Name)
+		clonePaths = append(clonePaths, childRes.ClonePath)
+		hookLogs[p.Name] = childRes.HookLog
+		createdChildNames = append(createdChildNames, childRes.CellName)
 	}
 
 	slog.Info("multicell created", "name", opts.Name, "dir", parentDir, "projects", projectNames)
@@ -512,13 +641,14 @@ func (s *Service) CreateMulti(ctx context.Context, opts MultiOpts) (*MultiResult
 	}, nil
 }
 
-// ListMultiChildren returns the child clones registered under a multicell.
-func (s *Service) ListMultiChildren(ctx context.Context, multicellName string) ([]state.MulticellChild, error) {
-	return s.MulticellRepo.ListChildren(ctx, multicellName)
+// ListMultiChildren returns the first-class child cells registered under a
+// multicell coordinator.
+func (s *Service) ListMultiChildren(ctx context.Context, multicellName string) ([]state.Cell, error) {
+	return s.CellRepo.ListChildren(ctx, multicellName)
 }
 
-// removeMulticellDir deletes the multicell parent dir, refusing to touch any
-// path outside of the configured MulticellsDir.
+// removeMulticellDir deletes a path under the multicells dir, refusing to
+// touch any path outside of the configured MulticellsDir.
 func (s *Service) removeMulticellDir(path string) error {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
