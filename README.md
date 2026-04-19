@@ -27,17 +27,17 @@ Each cell is fully independent. No shared `node_modules`, no port conflicts, no 
 
 ### Multicells
 
-Some features span multiple repos. A **multicell** bundles clones of several projects under one parent directory and one tmux session:
+Some features span multiple repos. A **multicell** bundles clones of several projects under one parent directory. Each project gets its own tmux session, plus a coordinator session rooted at the parent dir:
 
 ```
 ~/hive/multicells/
-└── auth-overhaul/       # one multicell = one tmux session
-    ├── api-auth-overhaul/     # clone of api
-    ├── web-auth-overhaul/     # clone of web
-    └── mobile-auth-overhaul/  # clone of mobile
+└── auth-overhaul/             # coordinator session, rooted here
+    ├── api-auth-overhaul/     # clone of api, own tmux session
+    ├── web-auth-overhaul/     # clone of web, own tmux session
+    └── mobile-auth-overhaul/  # clone of mobile, own tmux session
 ```
 
-Press `C` on the Cells tab to create one — pick several projects, give the multicell a name, and Hive clones them all, runs each project's setup hooks, and drops you into a shared tmux session rooted at the parent dir. Child dir names are suffixed with the multicell name so they stay globally unique.
+Press `C` on the Cells tab to create one — pick several projects, give the multicell a name, and Hive clones them all, runs each project's setup hooks, and creates a tmux session for each child plus a coordinator session rooted at the parent dir. Each child is a first-class cell (navigable, killable, resumable on its own) that happens to know its `Parent` multicell. Child names are suffixed with the multicell name so they stay globally unique.
 
 ## Installation
 
@@ -77,7 +77,7 @@ This creates `~/.hive/config.yaml` and generates tmux keybindings. Follow the in
 hive start      # Creates the dashboard tmux session and attaches to it
 ```
 
-That's it. Everything else happens inside the dashboard.
+That's it. Everything else happens inside the dashboard. On a fresh launch (no existing `hive` session) Hive also resumes any cells that are in the DB but missing from tmux — handy after a reboot or `tmux kill-server`.
 
 ## The Dashboard
 
@@ -95,13 +95,14 @@ From any cell, press `<prefix> .` to switch back to the dashboard.
 | `h`/`l` or `Tab`/`Shift+Tab` | Switch tab |
 | `Enter` | Switch to cell |
 | `c` | Create new cell (project picker → name → clone) |
-| `C` | Create new multicell (multi-project picker → name → clones + shared session) |
+| `C` | Create new multicell (multi-project picker → name → coordinator + per-child sessions) |
 | `o` | Open headless cell in a project directory |
 | `H` | Create bare headless cell (tmux session only, in `~`) |
 | `x` | Kill cell (with confirmation) |
+| `R` | Recreate a dead cell's tmux session (reuses stored ports, skips hooks) |
 | `n` | Mark notifications read |
 | `r` | Refresh |
-| `q` | Quit dashboard |
+| `q` | Quit dashboard (with confirmation) |
 
 ### Projects Tab
 
