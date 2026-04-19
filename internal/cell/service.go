@@ -32,9 +32,10 @@ type Service struct {
 
 // CreateOpts holds the parameters for creating a new cell.
 type CreateOpts struct {
-	Project  string // e.g. "my-api"
-	Name     string // e.g. "work"
-	RepoPath string // e.g. ~/side_projects/my-api
+	Project    string // e.g. "my-api"
+	Name       string // e.g. "work"
+	RepoPath   string // e.g. ~/side_projects/my-api
+	OnProgress func(string)
 }
 
 // CreateResult holds the outcome of a successful cell creation.
@@ -54,6 +55,7 @@ type ProvisionOpts struct {
 	CellName   string            // value of HIVE_CELL in the hook env
 	AllocPorts bool              // whether to allocate ports per the loaded project config
 	ExtraEnv   map[string]string // additional env merged into the hook env (overrides nothing)
+	OnProgress func(string)      // optional; called with short step labels
 }
 
 // ProvisionResult describes a successfully provisioned working directory.
@@ -73,6 +75,12 @@ type ProvisionResult struct {
 // back before returning the error. Hook failures are fatal here — callers get
 // a usable-or-nothing guarantee.
 func (s *Service) provisionClone(ctx context.Context, opts ProvisionOpts) (*ProvisionResult, error) {
+	emit := func(line string) {
+		if opts.OnProgress != nil {
+			opts.OnProgress(line)
+		}
+	}
+
 	// Remove any orphaned clone directory at the target path.
 	if _, err := os.Stat(opts.TargetPath); err == nil {
 		slog.Info("removing orphaned clone directory", "path", opts.TargetPath)
@@ -85,6 +93,11 @@ func (s *Service) provisionClone(ctx context.Context, opts ProvisionOpts) (*Prov
 	projectCfg := config.LoadProjectOrDefault(s.HiveDir, opts.Project)
 
 	// Clone.
+	projectLabel := opts.Project
+	if projectLabel == "" {
+		projectLabel = opts.CellName
+	}
+	emit("cloning " + projectLabel)
 	slog.Info("cloning repo", "cell", opts.CellName, "from", opts.SourceRepo, "to", opts.TargetPath)
 	if err := s.CloneMgr.CloneInto(ctx, opts.SourceRepo, opts.TargetPath); err != nil {
 		return nil, fmt.Errorf("cloning repo: %w", err)
@@ -100,6 +113,7 @@ func (s *Service) provisionClone(ctx context.Context, opts ProvisionOpts) (*Prov
 	// Allocate ports if requested and configured.
 	var allocatedPorts map[string]int
 	if opts.AllocPorts && len(projectCfg.PortVars) > 0 {
+		emit("allocating ports")
 		allocator := ports.NewAllocator(s.DB)
 		p, err := allocator.Allocate(ctx, projectCfg.PortVars)
 		if err != nil {
@@ -123,7 +137,14 @@ func (s *Service) provisionClone(ctx context.Context, opts ProvisionOpts) (*Prov
 	if len(projectCfg.Hooks) > 0 {
 		slog.Info("running hooks", "cell", opts.CellName, "count", len(projectCfg.Hooks))
 		runner := hooks.NewRunner()
-		result := runner.Run(ctx, opts.TargetPath, projectCfg.Hooks, envVars)
+		onHook := func(idx, total int, cmd string) {
+			preview := cmd
+			if len(preview) > 60 {
+				preview = preview[:57] + "..."
+			}
+			emit(fmt.Sprintf("running hook %d/%d: %s", idx, total, preview))
+		}
+		result := runner.Run(ctx, opts.TargetPath, projectCfg.Hooks, envVars, onHook)
 		hookLog = fmt.Sprintf("hooks: %d/%d ran", result.Ran, result.Total)
 		if result.Failed != nil {
 			slog.Warn("hook failed", "cell", opts.CellName, "hook", result.Failed.Index, "error", result.Failed.Error())
@@ -159,6 +180,12 @@ func (s *Service) Create(ctx context.Context, opts CreateOpts) (*CreateResult, e
 		return nil, fmt.Errorf("cell %q already exists", cellName)
 	}
 
+	emit := func(line string) {
+		if opts.OnProgress != nil {
+			opts.OnProgress(line)
+		}
+	}
+
 	targetPath := filepath.Join(s.CloneMgr.CellsDir, opts.Project, opts.Name)
 
 	// Clone + ports + env + hooks. Rolls back on any failure.
@@ -168,6 +195,7 @@ func (s *Service) Create(ctx context.Context, opts CreateOpts) (*CreateResult, e
 		TargetPath: targetPath,
 		CellName:   cellName,
 		AllocPorts: true,
+		OnProgress: opts.OnProgress,
 	})
 	if err != nil {
 		return nil, err
@@ -177,6 +205,7 @@ func (s *Service) Create(ctx context.Context, opts CreateOpts) (*CreateResult, e
 	_ = s.TmuxMgr.KillSession(ctx, cellName)
 
 	// Create tmux session.
+	emit("creating tmux session")
 	if err := s.TmuxMgr.CreateSession(ctx, cellName, prov.ClonePath, prov.Env); err != nil {
 		if rmErr := os.RemoveAll(prov.ClonePath); rmErr != nil {
 			slog.Warn("rollback: failed to remove clone", "path", prov.ClonePath, "error", rmErr)
@@ -196,6 +225,7 @@ func (s *Service) Create(ctx context.Context, opts CreateOpts) (*CreateResult, e
 	// Apply default layout if it exists.
 	layoutLog := ""
 	if lyt, ok := prov.Config.Layouts["default"]; ok {
+		emit("applying layout")
 		if err := layout.Apply(ctx, cellName, prov.ClonePath, lyt); err != nil {
 			layoutLog = fmt.Sprintf("layout error: %v", err)
 			slog.Warn("failed to apply default layout", "cell", cellName, "error", err)
@@ -216,6 +246,7 @@ func (s *Service) Create(ctx context.Context, opts CreateOpts) (*CreateResult, e
 	}
 
 	// Create DB record.
+	emit("saving cell record")
 	cell := &state.Cell{
 		Name:      cellName,
 		Project:   opts.Project,
@@ -246,6 +277,7 @@ type ProvisionChildOpts struct {
 	SourceRepo string // git source path/URL
 	ParentName string // coordinator multicell name, e.g. "auth-overhaul"
 	ParentDir  string // absolute path to the parent dir
+	OnProgress func(string)
 }
 
 // ProvisionChildResult is the outcome for one successful child.
@@ -275,6 +307,12 @@ func (s *Service) provisionChildCell(ctx context.Context, opts ProvisionChildOpt
 		return nil, fmt.Errorf("child cell %q already exists", cellName)
 	}
 
+	emit := func(line string) {
+		if opts.OnProgress != nil {
+			opts.OnProgress(line)
+		}
+	}
+
 	prov, err := s.provisionClone(ctx, ProvisionOpts{
 		Project:    opts.Project,
 		SourceRepo: opts.SourceRepo,
@@ -286,6 +324,7 @@ func (s *Service) provisionChildCell(ctx context.Context, opts ProvisionChildOpt
 			"HIVE_MULTICELL_DIR": opts.ParentDir,
 			"HIVE_PROJECT":       opts.Project,
 		},
+		OnProgress: opts.OnProgress,
 	})
 	if err != nil {
 		return nil, err
@@ -293,6 +332,7 @@ func (s *Service) provisionChildCell(ctx context.Context, opts ProvisionChildOpt
 
 	_ = s.TmuxMgr.KillSession(ctx, cellName)
 
+	emit("creating tmux session")
 	if err := s.TmuxMgr.CreateSession(ctx, cellName, prov.ClonePath, prov.Env); err != nil {
 		if rmErr := os.RemoveAll(prov.ClonePath); rmErr != nil {
 			slog.Warn("rollback: failed to remove child clone", "path", prov.ClonePath, "error", rmErr)
@@ -311,6 +351,7 @@ func (s *Service) provisionChildCell(ctx context.Context, opts ProvisionChildOpt
 
 	layoutLog := ""
 	if lyt, ok := prov.Config.Layouts["default"]; ok {
+		emit("applying layout")
 		if err := layout.Apply(ctx, cellName, prov.ClonePath, lyt); err != nil {
 			layoutLog = fmt.Sprintf("layout error: %v", err)
 			slog.Warn("failed to apply default layout", "cell", cellName, "error", err)
@@ -329,6 +370,7 @@ func (s *Service) provisionChildCell(ctx context.Context, opts ProvisionChildOpt
 		portsJSON = string(data)
 	}
 
+	emit("saving cell record")
 	child := &state.Cell{
 		Name:      cellName,
 		Project:   opts.Project,
@@ -479,8 +521,9 @@ func (s *Service) List(ctx context.Context) ([]state.Cell, error) {
 
 // MultiOpts holds the parameters for creating a multicell.
 type MultiOpts struct {
-	Name     string                     // e.g. "auth-overhaul"
-	Projects []config.DiscoveredProject // selected projects with Name + Path
+	Name       string                     // e.g. "auth-overhaul"
+	Projects   []config.DiscoveredProject // selected projects with Name + Path
+	OnProgress func(string)
 }
 
 // MultiResult holds the outcome of a successful multicell creation.
@@ -553,6 +596,12 @@ func (s *Service) CreateMulti(ctx context.Context, opts MultiOpts) (*MultiResult
 		return nil, fmt.Errorf("creating multicell dir %q: %w", parentDir, err)
 	}
 
+	emit := func(line string) {
+		if opts.OnProgress != nil {
+			opts.OnProgress(line)
+		}
+	}
+
 	// 8. Create coordinator tmux session rooted at parentDir (plain shell,
 	// no ports/hooks/layout).
 	coordEnv := map[string]string{
@@ -560,6 +609,7 @@ func (s *Service) CreateMulti(ctx context.Context, opts MultiOpts) (*MultiResult
 		"HIVE_MULTICELL":     opts.Name,
 		"HIVE_MULTICELL_DIR": parentDir,
 	}
+	emit("creating coordinator session")
 	if err := s.TmuxMgr.CreateSession(ctx, opts.Name, parentDir, coordEnv); err != nil {
 		if rmErr := os.RemoveAll(parentDir); rmErr != nil {
 			slog.Warn("rollback: failed to remove multicell dir", "path", parentDir, "error", rmErr)
@@ -613,11 +663,17 @@ func (s *Service) CreateMulti(ctx context.Context, opts MultiOpts) (*MultiResult
 	}
 
 	for _, p := range opts.Projects {
+		var childProgress func(string)
+		if opts.OnProgress != nil {
+			prefix := "[" + p.Name + "] "
+			childProgress = func(s string) { opts.OnProgress(prefix + s) }
+		}
 		childRes, err := s.provisionChildCell(ctx, ProvisionChildOpts{
 			Project:    p.Name,
 			SourceRepo: p.Path,
 			ParentName: opts.Name,
 			ParentDir:  parentDir,
+			OnProgress: childProgress,
 		})
 		if err != nil {
 			rollbackAll()

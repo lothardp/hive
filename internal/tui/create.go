@@ -34,6 +34,10 @@ type CreateModel struct {
 	nameInput      string
 	selectedProject config.DiscoveredProject
 
+	// Progress
+	progressLine string
+	progressCh   chan string
+
 	// Result
 	result  *cell.CreateResult
 	err     error
@@ -57,6 +61,8 @@ type cellCreated struct {
 	result *cell.CreateResult
 }
 type cellCreateFailed struct{ err error }
+type progressMsg struct{ line string }
+type progressDone struct{}
 
 // Update handles input for the create overlay.
 func (m *CreateModel) Update(msg tea.Msg) (*CreateModel, tea.Cmd) {
@@ -71,6 +77,13 @@ func (m *CreateModel) Update(msg tea.Msg) (*CreateModel, tea.Cmd) {
 		m.err = msg.err
 		m.step = stepDone
 		m.message = fmt.Sprintf("Failed: %v", msg.err)
+		return m, nil
+
+	case progressMsg:
+		m.progressLine = msg.line
+		return m, m.listenProgress()
+
+	case progressDone:
 		return m, nil
 
 	case tea.KeyMsg:
@@ -144,12 +157,12 @@ func (m *CreateModel) updateNameInput(msg tea.KeyMsg) (*CreateModel, tea.Cmd) {
 			return m, nil
 		}
 		m.step = stepCreating
-		opts := cell.CreateOpts{
+		createCmd, listenCmd := m.startCreate(cell.CreateOpts{
 			Project:  m.selectedProject.Name,
 			Name:     name,
 			RepoPath: m.selectedProject.Path,
-		}
-		return m, m.createCell(opts)
+		})
+		return m, tea.Batch(createCmd, listenCmd)
 
 	case msg.Type == tea.KeyBackspace:
 		if len(m.nameInput) > 0 {
@@ -165,14 +178,38 @@ func (m *CreateModel) updateNameInput(msg tea.KeyMsg) (*CreateModel, tea.Cmd) {
 	}
 }
 
-func (m *CreateModel) createCell(opts cell.CreateOpts) tea.Cmd {
-	return func() tea.Msg {
+func (m *CreateModel) startCreate(opts cell.CreateOpts) (tea.Cmd, tea.Cmd) {
+	m.progressCh = make(chan string, 16)
+	ch := m.progressCh
+
+	opts.OnProgress = func(s string) {
+		select {
+		case ch <- s:
+		default:
+		}
+	}
+
+	createCmd := func() tea.Msg {
 		ctx := context.Background()
+		defer close(ch)
 		result, err := m.cellService.Create(ctx, opts)
 		if err != nil {
 			return cellCreateFailed{err: err}
 		}
 		return cellCreated{result: result}
+	}
+
+	return createCmd, m.listenProgress()
+}
+
+func (m *CreateModel) listenProgress() tea.Cmd {
+	ch := m.progressCh
+	return func() tea.Msg {
+		s, ok := <-ch
+		if !ok {
+			return progressDone{}
+		}
+		return progressMsg{line: s}
 	}
 }
 
@@ -223,8 +260,12 @@ func (m *CreateModel) View(width, height int) string {
 		b.WriteString("  " + helpStyle.Render("enter create  esc back"))
 
 	case stepCreating:
+		line := m.progressLine
+		if line == "" {
+			line = fmt.Sprintf("Cloning %s...", m.selectedProject.Name)
+		}
 		b.WriteString("  " + titleStyle.Render("Creating cell...") + "\n\n")
-		b.WriteString("  " + progressStyle.Render(fmt.Sprintf("Cloning %s...", m.selectedProject.Name)) + "\n")
+		b.WriteString("  " + progressStyle.Render(line) + "\n")
 
 	case stepDone:
 		if m.err != nil {

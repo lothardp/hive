@@ -33,6 +33,10 @@ type CreateMultiModel struct {
 	// Name input
 	nameInput string
 
+	// Progress
+	progressLine string
+	progressCh   chan string
+
 	// Result
 	result  *cell.MultiResult
 	err     error
@@ -70,6 +74,13 @@ func (m *CreateMultiModel) Update(msg tea.Msg) (*CreateMultiModel, tea.Cmd) {
 		m.err = msg.err
 		m.step = multiStepDone
 		m.message = fmt.Sprintf("Failed: %v", msg.err)
+		return m, nil
+
+	case progressMsg:
+		m.progressLine = msg.line
+		return m, m.listenProgress()
+
+	case progressDone:
 		return m, nil
 
 	case tea.KeyMsg:
@@ -177,7 +188,8 @@ func (m *CreateMultiModel) updateNameInput(msg tea.KeyMsg) (*CreateMultiModel, t
 			return m, nil
 		}
 		m.step = multiStepCreating
-		return m, m.createMulticell(name)
+		createCmd, listenCmd := m.startCreate(name)
+		return m, tea.Batch(createCmd, listenCmd)
 
 	case msg.Type == tea.KeyBackspace:
 		if len(m.nameInput) > 0 {
@@ -193,18 +205,43 @@ func (m *CreateMultiModel) updateNameInput(msg tea.KeyMsg) (*CreateMultiModel, t
 	}
 }
 
-func (m *CreateMultiModel) createMulticell(name string) tea.Cmd {
+func (m *CreateMultiModel) startCreate(name string) (tea.Cmd, tea.Cmd) {
 	selected := m.selectedProjects()
-	return func() tea.Msg {
+	m.progressCh = make(chan string, 16)
+	ch := m.progressCh
+
+	opts := cell.MultiOpts{
+		Name:     name,
+		Projects: selected,
+		OnProgress: func(s string) {
+			select {
+			case ch <- s:
+			default:
+			}
+		},
+	}
+
+	createCmd := func() tea.Msg {
 		ctx := context.Background()
-		result, err := m.cellService.CreateMulti(ctx, cell.MultiOpts{
-			Name:     name,
-			Projects: selected,
-		})
+		defer close(ch)
+		result, err := m.cellService.CreateMulti(ctx, opts)
 		if err != nil {
 			return multicellCreateFailed{err: err}
 		}
 		return multicellCreated{result: result}
+	}
+
+	return createCmd, m.listenProgress()
+}
+
+func (m *CreateMultiModel) listenProgress() tea.Cmd {
+	ch := m.progressCh
+	return func() tea.Msg {
+		s, ok := <-ch
+		if !ok {
+			return progressDone{}
+		}
+		return progressMsg{line: s}
 	}
 }
 
@@ -276,8 +313,12 @@ func (m *CreateMultiModel) View(width, height int) string {
 		b.WriteString("  " + helpStyle.Render("enter create  esc back"))
 
 	case multiStepCreating:
+		line := m.progressLine
+		if line == "" {
+			line = "Cloning projects and running hooks..."
+		}
 		b.WriteString("  " + titleStyle.Render("Creating multicell...") + "\n\n")
-		b.WriteString("  " + progressStyle.Render("Cloning projects and running hooks...") + "\n")
+		b.WriteString("  " + progressStyle.Render(line) + "\n")
 
 	case multiStepDone:
 		if m.err != nil {
