@@ -9,6 +9,7 @@ import (
 
 	"path/filepath"
 
+	"github.com/lothardp/hive/internal/cell"
 	"github.com/lothardp/hive/internal/clone"
 	"github.com/lothardp/hive/internal/config"
 	"github.com/lothardp/hive/internal/state"
@@ -100,4 +101,16 @@ func init() {
 
 func Execute() error {
 	return rootCmd.Execute()
+}
+
+// NewCellService builds a cell.Service from the App's initialized dependencies.
+func (a *App) NewCellService() *cell.Service {
+	return &cell.Service{
+		CellRepo:      a.CellRepo,
+		CloneMgr:      a.CloneMgr,
+		TmuxMgr:       a.TmuxMgr,
+		HiveDir:       a.HiveDir,
+		MulticellsDir: a.MulticellsDir,
+		DB:            a.DB,
+	}
 }

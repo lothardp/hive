@@ -238,6 +238,12 @@ func DiscoverProjects(projectDirs []string) ([]DiscoveredProject, error) {
 // Helpers
 // ---------------------------------------------------------------------------
 
+// ExpandTilde expands a leading ~ or ~/ to the user's home directory.
+// Non-tilde paths are returned unchanged.
+func ExpandTilde(path string) string {
+	return expandTilde(path)
+}
+
 func expandTilde(path string) string {
 	if !strings.HasPrefix(path, "~") {
 		return path
