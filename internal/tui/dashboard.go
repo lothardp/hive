@@ -57,6 +57,7 @@ type Model struct {
 	width, height int
 	scrollOffset  int
 	quitting      bool
+	confirmingQuit bool
 }
 
 // NewModel creates a dashboard model with required dependencies.
@@ -132,6 +133,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// If confirming quit, intercept keys
+	if m.confirmingQuit {
+		if msg, ok := msg.(tea.KeyMsg); ok {
+			switch msg.String() {
+			case "y", "Y":
+				m.quitting = true
+				return m, tea.Quit
+			default:
+				m.confirmingQuit = false
+				return m, nil
+			}
+		}
+		return m, nil
+	}
+
 	// If creating a cell, delegate to the create overlay
 	if m.creating != nil {
 		return m.updateCreating(msg)
@@ -166,8 +182,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if msg, ok := msg.(tea.KeyMsg); ok {
 		switch {
 		case key.Matches(msg, dashKeys.Quit):
-			m.quitting = true
-			return m, tea.Quit
+			m.confirmingQuit = true
+			return m, nil
 
 		case key.Matches(msg, dashKeys.Tab), key.Matches(msg, dashKeys.NextTab):
 			m.activeTab = (m.activeTab + 1) % len(tabNames)
@@ -492,14 +508,16 @@ func (m Model) View() string {
 
 	// Footer: blank line + help text + trailing newline = 3 lines
 	var footer string
-	switch m.activeTab {
-	case tabCells:
+	switch {
+	case m.confirmingQuit:
+		footer = confirmStyle.Render("Quit dashboard? (y/N)")
+	case m.activeTab == tabCells:
 		footer = m.cells.Footer()
-	case tabProjects:
+	case m.activeTab == tabProjects:
 		footer = m.projects.Footer()
-	case tabConfig:
+	case m.activeTab == tabConfig:
 		footer = m.configTab.Footer()
-	case tabNotifs:
+	case m.activeTab == tabNotifs:
 		footer = m.notifs.Footer()
 	}
 	footer = "\n" + footer + "\n"
