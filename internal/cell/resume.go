@@ -31,6 +31,45 @@ type FailedCell struct {
 	Error error
 }
 
+// Recreate rehydrates the tmux session for a single cell. Uses stored ports,
+// skips hooks, re-applies the default layout. Any existing session with the
+// same name is killed first, so Recreate is safe whether the session is alive
+// or dead.
+func (s *Service) Recreate(ctx context.Context, name string) error {
+	c, err := s.CellRepo.GetByName(ctx, name)
+	if err != nil {
+		return fmt.Errorf("looking up cell: %w", err)
+	}
+	if c == nil {
+		return fmt.Errorf("cell %q not found", name)
+	}
+
+	summary := &ResumeSummary{}
+	s.recreateOne(ctx, *c, summary)
+
+	if len(summary.Failed) > 0 {
+		return summary.Failed[0].Error
+	}
+	if len(summary.Skipped) > 0 {
+		return fmt.Errorf("cannot recreate %q: %s", name, summary.Skipped[0].Reason)
+	}
+	return nil
+}
+
+// recreateOne dispatches a single cell to the type-specific resume helper.
+func (s *Service) recreateOne(ctx context.Context, c state.Cell, summary *ResumeSummary) {
+	switch c.Type {
+	case state.TypeHeadless:
+		s.resumeHeadless(ctx, c, summary)
+	case state.TypeMulti:
+		s.resumeMulti(ctx, c, summary)
+	case state.TypeMultiChild:
+		s.resumeMultiChild(ctx, c, summary)
+	default:
+		s.resumeNormal(ctx, c, summary)
+	}
+}
+
 // ResumeAll recreates tmux sessions for cells in the DB that aren't currently
 // running. Uses stored ports, skips hooks, re-applies the default layout for
 // cells that have a clone. Per-cell failures are collected into the summary;
@@ -61,16 +100,7 @@ func (s *Service) ResumeAll(ctx context.Context) (*ResumeSummary, error) {
 			continue
 		}
 
-		switch c.Type {
-		case state.TypeHeadless:
-			s.resumeHeadless(ctx, c, summary)
-		case state.TypeMulti:
-			s.resumeMulti(ctx, c, summary)
-		case state.TypeMultiChild:
-			s.resumeMultiChild(ctx, c, summary)
-		default:
-			s.resumeNormal(ctx, c, summary)
-		}
+		s.recreateOne(ctx, c, summary)
 	}
 
 	slog.Info("resume complete",

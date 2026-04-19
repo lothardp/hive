@@ -211,7 +211,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Route data messages to their owning tab regardless of active tab.
 	var cmd tea.Cmd
 	switch msg.(type) {
-	case cellsLoaded, cellKilled, killFailed, cellSwitched, clearMsg:
+	case cellsLoaded, cellKilled, killFailed, cellRecreated, recreateFailed, cellSwitched, clearMsg:
 		m.cells, cmd = m.cells.Update(msg)
 		return m, cmd
 	case projectsLoaded, editorFinished:

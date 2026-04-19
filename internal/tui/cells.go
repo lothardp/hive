@@ -59,6 +59,11 @@ type killFailed struct {
 	name string
 	err  error
 }
+type cellRecreated struct{ name string }
+type recreateFailed struct {
+	name string
+	err  error
+}
 type cellSwitched struct{}
 type clearMsg struct{}
 
@@ -192,6 +197,14 @@ func (m CellsModel) Update(msg tea.Msg) (CellsModel, tea.Cmd) {
 		m.confirmName = ""
 		return m, clearAfter(3*time.Second)
 
+	case cellRecreated:
+		m.message = fmt.Sprintf("Recreated %q", msg.name)
+		return m, tea.Batch(m.LoadCells(), switchToSession(msg.name), clearAfter(3*time.Second))
+
+	case recreateFailed:
+		m.message = fmt.Sprintf("Recreate %q failed: %v", msg.name, msg.err)
+		return m, clearAfter(5*time.Second)
+
 	case cellSwitched:
 		return m, nil
 
@@ -264,6 +277,25 @@ func (m CellsModel) updateNormal(msg tea.KeyMsg) (CellsModel, tea.Cmd) {
 
 	case key.Matches(msg, cellKeys.Refresh):
 		return m, m.LoadCells()
+
+	case key.Matches(msg, cellKeys.Recreate):
+		r := m.selectedRow()
+		if r == nil || r.cell == nil {
+			return m, nil
+		}
+		if r.tmuxAlive {
+			m.message = fmt.Sprintf("%q is already running", r.cell.Name)
+			return m, clearAfter(3 * time.Second)
+		}
+		name := r.cell.Name
+		m.message = fmt.Sprintf("Recreating %q…", name)
+		return m, func() tea.Msg {
+			ctx := context.Background()
+			if err := m.cellService.Recreate(ctx, name); err != nil {
+				return recreateFailed{name, err}
+			}
+			return cellRecreated{name}
+		}
 	}
 
 	return m, nil
@@ -380,7 +412,7 @@ func (m CellsModel) Footer() string {
 	if m.message != "" {
 		return m.message
 	}
-	return helpStyle.Render("enter switch  c create  C multicell  o open  H headless  x kill  n read notifs  r refresh  h/l tabs  q quit")
+	return helpStyle.Render("enter switch  c create  C multicell  o open  H headless  x kill  R recreate  n read notifs  r refresh  h/l tabs  q quit")
 }
 
 // Helpers
@@ -449,19 +481,21 @@ func formatAge(d time.Duration) string {
 // Key bindings for cells tab (only ones handled inside cells model)
 
 type cellKeyMap struct {
-	Up      key.Binding
-	Down    key.Binding
-	Enter   key.Binding
-	Kill    key.Binding
-	Notifs  key.Binding
-	Refresh key.Binding
+	Up       key.Binding
+	Down     key.Binding
+	Enter    key.Binding
+	Kill     key.Binding
+	Notifs   key.Binding
+	Refresh  key.Binding
+	Recreate key.Binding
 }
 
 var cellKeys = cellKeyMap{
-	Up:      key.NewBinding(key.WithKeys("up", "k")),
-	Down:    key.NewBinding(key.WithKeys("down", "j")),
-	Enter:   key.NewBinding(key.WithKeys("enter")),
-	Kill:    key.NewBinding(key.WithKeys("x")),
-	Notifs:  key.NewBinding(key.WithKeys("n")),
-	Refresh: key.NewBinding(key.WithKeys("r")),
+	Up:       key.NewBinding(key.WithKeys("up", "k")),
+	Down:     key.NewBinding(key.WithKeys("down", "j")),
+	Enter:    key.NewBinding(key.WithKeys("enter")),
+	Kill:     key.NewBinding(key.WithKeys("x")),
+	Notifs:   key.NewBinding(key.WithKeys("n")),
+	Refresh:  key.NewBinding(key.WithKeys("r")),
+	Recreate: key.NewBinding(key.WithKeys("R")),
 }
