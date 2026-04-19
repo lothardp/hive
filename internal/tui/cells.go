@@ -305,6 +305,9 @@ func (m CellsModel) updateConfirming(msg tea.KeyMsg) (CellsModel, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y":
 		name := m.confirmName
+		m.confirming = false
+		m.confirmName = ""
+		m.message = fmt.Sprintf("Killing %q…", name)
 		return m, func() tea.Msg {
 			ctx := context.Background()
 			// Try killing as a managed cell first; if not found, kill the raw tmux session.
