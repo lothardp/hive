@@ -65,6 +65,7 @@ type recreateFailed struct {
 	err  error
 }
 type cellSwitched struct{}
+type noLastSession struct{}
 type clearMsg struct{}
 
 func (m CellsModel) LoadCells() tea.Cmd {
@@ -208,6 +209,10 @@ func (m CellsModel) Update(msg tea.Msg) (CellsModel, tea.Cmd) {
 	case cellSwitched:
 		return m, nil
 
+	case noLastSession:
+		m.message = "No previous session to go back to"
+		return m, clearAfter(2 * time.Second)
+
 	case clearMsg:
 		m.message = ""
 		return m, nil
@@ -296,6 +301,9 @@ func (m CellsModel) updateNormal(msg tea.KeyMsg) (CellsModel, tea.Cmd) {
 			}
 			return cellRecreated{name}
 		}
+
+	case key.Matches(msg, cellKeys.Back):
+		return m, switchToLastSession()
 	}
 
 	return m, nil
@@ -415,7 +423,7 @@ func (m CellsModel) Footer() string {
 	if m.message != "" {
 		return m.message
 	}
-	return helpStyle.Render("enter switch  c create  C multicell  o open  H headless  x kill  R recreate  n read notifs  r refresh  h/l tabs  q quit")
+	return helpStyle.Render("enter switch  esc back  c create  C multicell  o open  H headless  x kill  R recreate  n read notifs  r refresh  h/l tabs  q quit")
 }
 
 // Helpers
@@ -424,6 +432,17 @@ func switchToSession(name string) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
 		_, _ = shell.Run(ctx, "tmux", "switch-client", "-t", name)
+		return cellSwitched{}
+	}
+}
+
+func switchToLastSession() tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		res, err := shell.Run(ctx, "tmux", "switch-client", "-l")
+		if err != nil || res.ExitCode != 0 {
+			return noLastSession{}
+		}
 		return cellSwitched{}
 	}
 }
@@ -491,6 +510,7 @@ type cellKeyMap struct {
 	Notifs   key.Binding
 	Refresh  key.Binding
 	Recreate key.Binding
+	Back     key.Binding
 }
 
 var cellKeys = cellKeyMap{
@@ -501,4 +521,5 @@ var cellKeys = cellKeyMap{
 	Notifs:   key.NewBinding(key.WithKeys("n")),
 	Refresh:  key.NewBinding(key.WithKeys("r")),
 	Recreate: key.NewBinding(key.WithKeys("R")),
+	Back:     key.NewBinding(key.WithKeys("esc")),
 }
